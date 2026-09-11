@@ -22,6 +22,7 @@ struct TonightView: View {
                             .background(AstroTheme.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                     }
                     conditions
+                    if let best { featuredTarget(best) }
                     targetList
                     updatedFooter
                 }
@@ -75,13 +76,59 @@ struct TonightView: View {
 
     private var targetList: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("TONIGHT'S BEST TARGETS").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
-            ForEach(snapshot.plans.prefix(5)) { plan in
+            Text(best == nil ? "TONIGHT'S TARGETS" : "NEXT BEST TARGETS").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
+            ForEach(Array(snapshot.plans.dropFirst().prefix(4))) { plan in
                 NavigationLink(value: plan) { TargetRow(plan: plan) }
                     .buttonStyle(.plain)
             }
+            if snapshot.plans.count <= 1 {
+                Text("No additional targets clear tonight's safety and altitude checks.")
+                    .font(.caption)
+                    .foregroundStyle(AstroTheme.muted)
+            }
         }
         .navigationDestination(for: CapturePlan.self) { TargetDetailView(plan: $0, sky: snapshot.sky) }
+    }
+
+    private func featuredTarget(_ plan: CapturePlan) -> some View {
+        NavigationLink(value: plan) {
+            AstroPanel {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("#1 TARGET TONIGHT", systemImage: "scope")
+                            .font(.caption.bold().monospaced())
+                            .foregroundStyle(AstroTheme.red)
+                        Spacer()
+                        Text("\(plan.condition) // \(plan.score)")
+                            .font(.caption2.bold().monospaced())
+                            .foregroundStyle(AstroTheme.scoreColor(plan.score))
+                    }
+                    Text("\(plan.target.id) // \(plan.target.name)")
+                        .font(.title2.bold())
+                        .foregroundStyle(AstroTheme.text)
+                    Text("START \(plan.start.astroTime)  •  PEAK \(plan.bestTime.astroTime)  •  STOP \(plan.end.astroTime)")
+                        .font(.caption.bold().monospaced())
+                        .foregroundStyle(AstroTheme.text)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+                    Text("Best because it \(plan.rankReason)")
+                        .font(.subheadline)
+                        .foregroundStyle(AstroTheme.muted)
+                    HStack {
+                        Label("\(plan.integrationMinutes) MIN STACK", systemImage: "timer")
+                        Spacer()
+                        Label(plan.filterText.uppercased(), systemImage: "camera.filters")
+                    }
+                    .font(.caption2.bold().monospaced())
+                    .foregroundStyle(AstroTheme.red)
+                    Text("Tap for the complete S30 Pro capture plan")
+                        .font(.caption2.bold())
+                        .foregroundStyle(AstroTheme.text)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Number one target tonight, \(plan.target.id), \(plan.target.name). Tap for capture plan.")
     }
 
     private var updatedFooter: some View {

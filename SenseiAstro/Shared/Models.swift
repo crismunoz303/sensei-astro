@@ -67,6 +67,52 @@ struct CapturePlan: Identifiable, Hashable, Codable {
             ? "Anti-dew ON"
             : "Anti-dew AUTO/OFF; inspect between stacks"
     }
+
+    var confidenceText: String {
+        guard weather != nil else { return "PROVISIONAL" }
+        if score >= 80 { return "HIGH" }
+        if score >= 60 { return "MEDIUM" }
+        return "LOW"
+    }
+
+    var filterReason: String {
+        target.filterEnabled
+            ? "Suppresses city glow and strengthens emission signal."
+            : "Preserves broadband light and natural star/galaxy color."
+    }
+
+    var rankReason: String {
+        var reasons = ["peaks at \(Int(altitude.rounded()))° altitude"]
+        if moonSeparation >= 90 { reasons.append("well separated from the Moon") }
+        else if moonSeparation < 45 { reasons.append("Moon interference is a risk") }
+        if let weather {
+            reasons.append("\(Int(weather.cloudPercent.rounded()))% cloud near peak")
+        }
+        return reasons.joined(separator: ", ") + "."
+    }
+
+    var riskWarnings: [String] {
+        var values: [String] = []
+        if altitude < 35 { values.append("Low altitude: haze and city glow may reduce contrast.") }
+        if moonSeparation < 45 && skySensitiveToMoon {
+            values.append("Moon is close to this broadband target; expect weaker contrast.")
+        }
+        if let weather {
+            if weather.cloudPercent >= 45 { values.append("Cloud cover may interrupt stacking.") }
+            if weather.gustMPH >= 16 { values.append("Wind gusts may increase rejected frames.") }
+            if weather.humidityPercent >= 82 || weather.temperatureF - weather.dewPointF <= 4 {
+                values.append("Dew risk is high; enable anti-dew before the session.")
+            }
+        } else {
+            values.append("Live weather is unavailable; verify the sky before setup.")
+        }
+        if sessionMinutes < target.recommendedMinutes {
+            values.append("Tonight's window is shorter than the ideal integration for this target.")
+        }
+        return values
+    }
+
+    private var skySensitiveToMoon: Bool { !target.filterEnabled }
 }
 
 enum AstroTab: Hashable {

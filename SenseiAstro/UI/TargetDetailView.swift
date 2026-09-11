@@ -19,6 +19,7 @@ struct TargetDetailView: View {
                     Text("\(plan.target.type) | \(plan.condition) / \(plan.score)").foregroundStyle(AstroTheme.scoreColor(plan.score))
 
                     detailGrid
+                    transferPanel
                     sequencePanel
                     notesPanel
                     conditionsPanel
@@ -31,7 +32,6 @@ struct TargetDetailView: View {
                             .background(AstroTheme.panel, in: RoundedRectangle(cornerRadius: 14))
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(AstroTheme.red.opacity(0.4)))
                     }
-                    openSeestarButton
                 }
                 .padding()
             }
@@ -67,12 +67,44 @@ struct TargetDetailView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("EXACT SHOOTING SEQUENCE").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
                 step(1, "Place the standard tripod on firm ground, level it, and provide at least 45 degrees of clear sky.")
-                step(2, "Power on the S30 Pro, connect in Seestar, and enter Stargazing mode.")
+                step(2, "Power on the S30 Pro, connect in the Seestar app, and enter Stargazing mode.")
                 step(3, "Search for \(plan.target.id), tap GoTo, and let plate solving, centering, and autofocus finish.")
                 step(4, "Set \(plan.filterText). Use \(plan.target.lens) with \(plan.target.framing.lowercased()).")
-                step(5, "Use \(plan.exposureSeconds)-second sub-exposures. Begin near \(plan.start.astroTime); allow \(plan.sessionMinutes) minutes to collect \(plan.integrationMinutes) accepted minutes.")
+                step(5, "Begin near \(plan.start.astroTime). Allow \(plan.sessionMinutes) minutes to collect about \(plan.integrationMinutes) accepted minutes; the app's live stack handles the individual frames.")
                 step(6, "Watch accepted versus rejected frames for five minutes. Re-level or shelter from wind if rejection rises.")
                 step(7, "Stop near \(plan.end.astroTime), or continue only while the target remains high and conditions stay clear.")
+            }
+        }
+    }
+
+    private var transferPanel: some View {
+        AstroPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("USE THESE IN SEESTAR").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
+                    Spacer()
+                    Text("\(plan.confidenceText) CONFIDENCE")
+                        .font(.caption2.bold().monospaced())
+                        .foregroundStyle(AstroTheme.scoreColor(plan.score))
+                }
+                instruction("TARGET", "\(plan.target.id) // \(plan.target.name)")
+                instruction("MODE", "Stargazing")
+                instruction("CAMERA", plan.target.lens)
+                instruction("FRAMING", plan.target.framing)
+                instruction("FILTER", plan.filterText)
+                instruction("STACK GOAL", "\(plan.integrationMinutes) accepted min")
+                instruction("RUN TIME", "\(plan.start.astroTime)-\(plan.end.astroTime) // \(plan.sessionMinutes) min")
+                Text(plan.filterReason).font(.caption).foregroundStyle(AstroTheme.muted)
+
+                if !plan.riskWarnings.isEmpty {
+                    Divider().overlay(AstroTheme.red.opacity(0.35))
+                    Text("WATCH LIST").font(.caption2.bold().monospaced()).foregroundStyle(AstroTheme.amber)
+                    ForEach(plan.riskWarnings, id: \.self) { warning in
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(AstroTheme.text)
+                    }
+                }
             }
         }
     }
@@ -102,14 +134,11 @@ struct TargetDetailView: View {
         }
     }
 
-    private var openSeestarButton: some View {
-        Link(destination: URL(string: "shortcuts://run-shortcut?name=Open%20Seestar")!) {
-            Label("OPEN SEESTAR", systemImage: "scope")
-                .font(.headline.bold().monospaced())
-                .frame(maxWidth: .infinity)
-                .padding()
-                .foregroundStyle(.white)
-                .background(AstroTheme.red, in: RoundedRectangle(cornerRadius: 14))
+    private func instruction(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).font(.caption2.bold().monospaced()).foregroundStyle(AstroTheme.muted)
+            Spacer()
+            Text(value).font(.subheadline.bold()).foregroundStyle(AstroTheme.text).multilineTextAlignment(.trailing)
         }
     }
 
@@ -130,11 +159,12 @@ struct TargetDetailView: View {
         """
         SENSEI ASTRO // \(plan.target.id) \(plan.target.name)
         Session: \(plan.start.astroTime)-\(plan.end.astroTime) (peak \(plan.bestTime.astroTime))
-        Goal: \(plan.integrationMinutes) accepted minutes, \(plan.exposureSeconds)s x \(plan.acceptedFrames)
+        Goal: \(plan.integrationMinutes) accepted minutes in a \(plan.sessionMinutes)-minute session
         Position: \(Int(plan.altitude.rounded()))° \(plan.direction), azimuth \(Int(plan.azimuth.rounded()))°
         Filter: \(plan.filterText)
         Mount: standard tripod / Alt-Az
         Dew: \(plan.antiDewText)
+        Confidence: \(plan.confidenceText)
         """
     }
 }
