@@ -1,6 +1,8 @@
 name: Build Sensei Astro
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -11,6 +13,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: xcodegen generate
+      - name: Run planner tests
+        run: |
+          set -euo pipefail
+          xcodebuild test -project SenseiAstro.xcodeproj -scheme SenseiAstro -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 16 Pro' CODE_SIGNING_ALLOWED=NO
       - name: Compile for iPhone
         run: |
           set -euo pipefail

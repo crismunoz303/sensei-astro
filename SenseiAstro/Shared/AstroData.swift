@@ -1,6 +1,6 @@
 import Foundation
 
-struct AstroCoordinate: Hashable {
+struct AstroCoordinate: Hashable, Codable {
     let latitude: Double
     let longitude: Double
 
@@ -13,7 +13,7 @@ enum AstroData {
         async let sky = SkyClient.load(now: now, coordinate: coordinate)
         let weatherResult = await weather
         let skyResult = (await sky).withWeather(weatherResult)
-        let plans = PlannerEngine.rank(TargetCatalog.all, coordinate: coordinate, sky: skyResult)
+        let plans = PlannerEngine.rank(TargetCatalog.all, coordinate: coordinate, sky: skyResult, now: now)
         return AstroSnapshot(locationName: locationName, sky: skyResult, plans: plans, updatedAt: Date())
     }
 }
@@ -27,6 +27,7 @@ private extension SkyContext {
 enum WeatherClient {
     private struct Response: Decodable {
         let hourly: Hourly
+        let timezone: String
     }
 
     private struct Hourly: Decodable {
@@ -54,10 +55,11 @@ enum WeatherClient {
         do {
             let (data, response) = try await URLSession.shared.data(from: components.url!)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
-            let hourly = try JSONDecoder().decode(Response.self, from: data).hourly
+            let decoded = try JSONDecoder().decode(Response.self, from: data)
+            let hourly = decoded.hourly
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = .current
+            formatter.timeZone = TimeZone(identifier: decoded.timezone) ?? .current
             formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
             return hourly.time.indices.compactMap { index in
                 guard let date = formatter.date(from: hourly.time[index]) else { return nil }
@@ -105,10 +107,13 @@ enum SkyClient {
         async let second = day(next, coordinate: coordinate)
         let (todayData, tomorrowData) = await (first, second)
 
-        let fallbackStart = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: base)!
-        let fallbackEnd = calendar.date(bySettingHour: 5, minute: 30, second: 0, of: next)!
-        let start = eventDate(todayData?.sundata, matching: "end civil twilight", day: base) ?? fallbackStart
-        let end = eventDate(tomorrowData?.sundata, matching: "begin civil twilight", day: next) ?? fallbackEnd
+        let computedDarkness = SolarMath.astronomicalNight(base: base, coordinate: coordinate)
+        let fallbackStart = eventDate(todayData?.sundata, matching: "end civil twilight", day: base)
+            ?? calendar.date(bySettingHour: 20, minute: 0, second: 0, of: base)!
+        let fallbackEnd = eventDate(tomorrowData?.sundata, matching: "begin civil twilight", day: next)
+            ?? calendar.date(bySettingHour: 5, minute: 30, second: 0, of: next)!
+        let start = computedDarkness?.start ?? fallbackStart
+        let end = computedDarkness?.end ?? fallbackEnd
         let moon = MoonMath.status(at: Date(timeIntervalSince1970: (start.timeIntervalSince1970 + end.timeIntervalSince1970) / 2))
         let parsedIllumination = todayData?.fracillum.flatMap { raw -> Double? in
             guard let number = Double(raw.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)) else { return nil }
@@ -123,6 +128,7 @@ enum SkyClient {
             moonrise: displayEvent(todayData?.moondata, matching: "rise"),
             moonset: displayEvent(todayData?.moondata, matching: "set"),
             sunset: displayEvent(todayData?.sundata, matching: "set"),
+            darknessLabel: computedDarkness == nil ? "CIVIL TWILIGHT FALLBACK" : "ASTRONOMICAL DARKNESS",
             weather: [],
             sourceOnline: todayData != nil && tomorrowData != nil
         )
@@ -197,6 +203,56 @@ enum MoonMath {
         let ra = normalize(degrees(atan2(sin(lambda) * cos(obliquity) - tan(beta) * sin(obliquity), cos(lambda))))
         let dec = degrees(asin(sin(beta) * cos(obliquity) + cos(beta) * sin(obliquity) * sin(lambda)))
         return (ra, dec)
+    }
+}
+
+enum SolarMath {
+    static func astronomicalNight(base: Date, coordinate: AstroCoordinate) -> (start: Date, end: Date)? {
+        let calendar = Calendar.current
+        guard let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: base),
+              let followingNoon = calendar.date(byAdding: .day, value: 1, to: noon) else { return nil }
+
+        let crossings = altitudeCrossings(from: noon, to: followingNoon, coordinate: coordinate, threshold: -18)
+        guard let start = crossings.first(where: { !$0.rising }),
+              let end = crossings.first(where: { $0.rising && $0.date > start.date }) else { return nil }
+        return (start.date, end.date)
+    }
+
+    private static func altitudeCrossings(from start: Date, to end: Date, coordinate: AstroCoordinate, threshold: Double) -> [(date: Date, rising: Bool)] {
+        let step: TimeInterval = 5 * 60
+        var result: [(date: Date, rising: Bool)] = []
+        var previousDate = start
+        var previousValue = altitude(at: start, coordinate: coordinate) - threshold
+        var cursor = start.addingTimeInterval(step)
+
+        while cursor <= end {
+            let value = altitude(at: cursor, coordinate: coordinate) - threshold
+            if (previousValue > 0 && value <= 0) || (previousValue <= 0 && value > 0) {
+                let fraction = abs(previousValue) / max(0.000_001, abs(previousValue) + abs(value))
+                let crossing = previousDate.addingTimeInterval(step * fraction)
+                result.append((crossing, value > previousValue))
+            }
+            previousDate = cursor
+            previousValue = value
+            cursor = cursor.addingTimeInterval(step)
+        }
+        return result
+    }
+
+    static func altitude(at date: Date, coordinate: AstroCoordinate) -> Double {
+        let days = julianDate(date) - 2_451_545.0
+        let meanLongitude = normalize(280.460 + 0.9856474 * days)
+        let anomaly = radians(normalize(357.528 + 0.9856003 * days))
+        let eclipticLongitude = radians(normalize(meanLongitude + 1.915 * sin(anomaly) + 0.020 * sin(2 * anomaly)))
+        let obliquity = radians(23.439 - 0.0000004 * days)
+        let rightAscension = normalize(degrees(atan2(cos(obliquity) * sin(eclipticLongitude), cos(eclipticLongitude))))
+        let declination = degrees(asin(sin(obliquity) * sin(eclipticLongitude)))
+        let centuries = days / 36_525
+        let sidereal = normalize(280.46061837 + 360.98564736629 * days + 0.000387933 * centuries * centuries - centuries * centuries * centuries / 38_710_000)
+        let hourAngle = radians(normalize180(sidereal + coordinate.longitude - rightAscension))
+        let latitude = radians(coordinate.latitude)
+        let dec = radians(declination)
+        return degrees(asin(sin(latitude) * sin(dec) + cos(latitude) * cos(dec) * cos(hourAngle)))
     }
 }
 

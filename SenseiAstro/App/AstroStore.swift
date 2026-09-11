@@ -14,6 +14,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var coordinate = AstroCoordinate.huntingtonPark
     private var locationName = "HUNTINGTON PARK"
     private var started = false
+    private var lastRefreshAttempt: Date?
 
     override init() {
         super.init()
@@ -32,6 +33,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     func refresh() async {
         guard !isLoading else { return }
         isLoading = true
+        lastRefreshAttempt = Date()
         errorMessage = nil
         let usedCoordinate = coordinate
         let usedName = locationName
@@ -49,12 +51,28 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         isLoading = false
     }
 
+    func refreshIfStale(maxAge: TimeInterval = 15 * 60) async {
+        guard let lastRefreshAttempt else {
+            await refresh()
+            return
+        }
+        if Date().timeIntervalSince(lastRefreshAttempt) >= maxAge { await refresh() }
+    }
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let latest = locations.last else { return }
         coordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
         let fallbackDistance = latest.distance(from: CLLocation(latitude: AstroCoordinate.huntingtonPark.latitude, longitude: AstroCoordinate.huntingtonPark.longitude))
         locationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK" : "CURRENT LOCATION"
-        Task { await refresh() }
+        Task {
+            if fallbackDistance >= 25_000,
+               let placemark = try? await CLGeocoder().reverseGeocodeLocation(latest).first {
+                let locality = placemark.locality ?? placemark.subAdministrativeArea
+                let region = placemark.administrativeArea
+                locationName = [locality, region].compactMap { $0 }.joined(separator: ", ").uppercased()
+            }
+            await refresh()
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

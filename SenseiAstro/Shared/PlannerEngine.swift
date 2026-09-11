@@ -10,27 +10,33 @@ enum PlannerEngine {
         let score: Double
     }
 
-    static func rank(_ targets: [AstroTarget], coordinate: AstroCoordinate, sky: SkyContext) -> [CapturePlan] {
+    static func rank(_ targets: [AstroTarget], coordinate: AstroCoordinate, sky: SkyContext, now: Date = Date()) -> [CapturePlan] {
+        let planningStart = now > sky.start && now < sky.end ? now : sky.start
+        guard planningStart < sky.end else { return [] }
         var samples: [Date] = []
-        var cursor = sky.start
+        var cursor = planningStart
         while cursor <= sky.end {
             samples.append(cursor)
             cursor = cursor.addingTimeInterval(15 * 60)
         }
 
-        let unranked: [(AstroTarget, Sample, Int, Date, Date, Int)] = targets.compactMap { target in
+        let unranked: [(AstroTarget, Sample, Int, Date, Date, Int, Int)] = targets.compactMap { target in
             let evaluated = samples.map { evaluate(target, at: $0, coordinate: coordinate, sky: sky) }
-            let visible = evaluated.filter { $0.altitude >= 25 }
-            guard let best = visible.max(by: { $0.score < $1.score }) else { return nil }
-            let preferred = evaluated.filter { $0.altitude >= 35 }
-            let window = preferred.isEmpty ? visible : preferred
-            guard let first = window.first, let last = window.last else { return nil }
-            let possibleMinutes = max(10, Int(last.time.timeIntervalSince(first.time) / 60))
-            let integration = max(10, min(target.recommendedMinutes, possibleMinutes / 10 * 10))
-            let start = captureStart(peak: best.time, minutes: integration, nightStart: sky.start, nightEnd: sky.end)
-            let end = start.addingTimeInterval(Double(integration * 60))
+            let usable = evaluated.map { sample in
+                sample.altitude >= 25 && !(sample.weather.map { $0.cloudPercent > 85 || $0.precipitationPercent > 60 || $0.gustMPH > 28 } ?? false)
+            }
+            let segments = continuousSegments(evaluated, usable: usable)
+            guard let window = segments.max(by: { segmentValue($0) < segmentValue($1) }),
+                  let first = window.first, let last = window.last,
+                  let best = window.max(by: { $0.score < $1.score }) else { return nil }
+            let possibleMinutes = max(15, Int(last.time.timeIntervalSince(first.time) / 60) + 15)
+            let integrationCapacity = max(10, Int(Double(possibleMinutes) * 0.8) / 5 * 5)
+            let integration = max(10, min(target.recommendedMinutes, integrationCapacity))
+            let session = min(possibleMinutes, max(integration, Int(ceil(Double(integration) * 1.25 / 5)) * 5))
+            let start = captureStart(peak: best.time, minutes: session, nightStart: first.time, nightEnd: last.time.addingTimeInterval(15 * 60))
+            let end = start.addingTimeInterval(Double(session * 60))
             let final = finalScore(target: target, best: best, possibleMinutes: possibleMinutes, moonIllumination: sky.moonIllumination)
-            return (target, best, final, start, end, integration)
+            return (target, best, final, start, end, integration, possibleMinutes)
         }
 
         return unranked.sorted { $0.2 > $1.2 }.enumerated().map { index, item in
@@ -46,11 +52,34 @@ enum PlannerEngine {
                 azimuth: item.1.azimuth,
                 direction: compass(item.1.azimuth),
                 moonSeparation: item.1.moonSeparation,
+                exposureSeconds: 10,
                 integrationMinutes: item.5,
-                acceptedFrames: item.5 * 6,
+                sessionMinutes: Int(item.4.timeIntervalSince(item.3) / 60),
+                visibleMinutes: item.6,
+                acceptedFrames: item.5 * 60 / 10,
                 weather: item.1.weather
             )
         }
+    }
+
+    private static func continuousSegments(_ samples: [Sample], usable: [Bool]) -> [[Sample]] {
+        var result: [[Sample]] = []
+        var current: [Sample] = []
+        for (index, sample) in samples.enumerated() {
+            if usable.indices.contains(index), usable[index] {
+                current.append(sample)
+            } else if !current.isEmpty {
+                result.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
+    private static func segmentValue(_ segment: [Sample]) -> Double {
+        guard let best = segment.max(by: { $0.score < $1.score }) else { return -.infinity }
+        return best.score + min(12, Double(segment.count) * 0.35)
     }
 
     private static func evaluate(_ target: AstroTarget, at date: Date, coordinate: AstroCoordinate, sky: SkyContext) -> Sample {
@@ -71,6 +100,7 @@ enum PlannerEngine {
         var result = best.score
         if possibleMinutes < target.recommendedMinutes { result -= Double(target.recommendedMinutes - possibleMinutes) * 0.08 }
         if !target.filterEnabled && moonIllumination > 0.65 && best.moonSeparation < 75 { result -= 8 }
+        if best.weather == nil { result = min(result, 69) }
         return Int(round(min(99, max(1, result))))
     }
 

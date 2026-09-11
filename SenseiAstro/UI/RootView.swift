@@ -23,6 +23,12 @@ struct RootView: View {
                 }
             }
         }
-        .task { store.start() }
+        .task {
+            store.start()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .minutes(15))
+                await store.refreshIfStale()
+            }
+        }
     }
 }

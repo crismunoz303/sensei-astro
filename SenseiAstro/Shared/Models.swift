@@ -13,7 +13,7 @@ struct AstroTarget: Identifiable, Hashable, Codable {
     let note: String
 }
 
-struct WeatherPoint: Hashable {
+struct WeatherPoint: Hashable, Codable {
     let time: Date
     let cloudPercent: Double
     let precipitationPercent: Double
@@ -24,7 +24,7 @@ struct WeatherPoint: Hashable {
     let gustMPH: Double
 }
 
-struct SkyContext {
+struct SkyContext: Codable {
     let start: Date
     let end: Date
     let moonPhase: String
@@ -32,11 +32,12 @@ struct SkyContext {
     let moonrise: String
     let moonset: String
     let sunset: String
+    let darknessLabel: String
     let weather: [WeatherPoint]
     let sourceOnline: Bool
 }
 
-struct CapturePlan: Identifiable, Hashable {
+struct CapturePlan: Identifiable, Hashable, Codable {
     var id: String { target.id }
     let rank: Int
     let target: AstroTarget
@@ -49,7 +50,10 @@ struct CapturePlan: Identifiable, Hashable {
     let azimuth: Double
     let direction: String
     let moonSeparation: Double
+    let exposureSeconds: Int
     let integrationMinutes: Int
+    let sessionMinutes: Int
+    let visibleMinutes: Int
     let acceptedFrames: Int
     let weather: WeatherPoint?
 
@@ -70,7 +74,7 @@ enum AstroTab: Hashable {
     case targets
 }
 
-struct AstroSnapshot {
+struct AstroSnapshot: Codable {
     let locationName: String
     let sky: SkyContext
     let plans: [CapturePlan]
@@ -83,14 +87,14 @@ struct AstroSnapshot {
             rank: 1, target: target, score: 88, condition: "EXCELLENT",
             bestTime: now.addingTimeInterval(3600), start: now.addingTimeInterval(1800),
             end: now.addingTimeInterval(6300), altitude: 72, azimuth: 35,
-            direction: "NE", moonSeparation: 110, integrationMinutes: 75,
+            direction: "NE", moonSeparation: 110, exposureSeconds: 10,
+            integrationMinutes: 75, sessionMinutes: 95, visibleMinutes: 180,
             acceptedFrames: 450, weather: nil
         )
         return AstroSnapshot(
             locationName: "HUNTINGTON PARK",
-            sky: SkyContext(start: now, end: now.addingTimeInterval(28_800), moonPhase: "Waxing Crescent", moonIllumination: 0.18, moonrise: "6:02 AM", moonset: "7:12 PM", sunset: "7:06 PM", weather: [], sourceOnline: false),
+            sky: SkyContext(start: now, end: now.addingTimeInterval(28_800), moonPhase: "Waxing Crescent", moonIllumination: 0.18, moonrise: "6:02 AM", moonset: "7:12 PM", sunset: "7:06 PM", darknessLabel: "ASTRONOMICAL DARKNESS", weather: [], sourceOnline: false),
             plans: [plan], updatedAt: now
         )
     }
 }
-

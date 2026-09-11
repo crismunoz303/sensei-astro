@@ -13,6 +13,14 @@ struct TonightView: View {
                 VStack(spacing: 14) {
                     commandHeader
                     verdictPanel
+                    if let message = store.errorMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(AstroTheme.amber)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(AstroTheme.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    }
                     conditions
                     targetList
                     updatedFooter
@@ -57,10 +65,11 @@ struct TonightView: View {
     }
 
     private var conditions: some View {
-        HStack(spacing: 8) {
-            MetricView(title: "NIGHT", value: "\(snapshot.sky.start.astroTime)-\(snapshot.sky.end.astroTime)", detail: "Sunset \(snapshot.sky.sunset)")
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            MetricView(title: "DARK SKY", value: "\(snapshot.sky.start.astroTime)-\(snapshot.sky.end.astroTime)", detail: snapshot.sky.darknessLabel.capitalized)
             MetricView(title: "MOON", value: "\(Int(snapshot.sky.moonIllumination * 100))%", detail: snapshot.sky.moonPhase)
             MetricView(title: "FORECAST", value: best?.weather.map { "\(Int($0.cloudPercent))% CLOUD" } ?? "OFFLINE", detail: best?.weather.map { "\(Int($0.windMPH)) MPH WIND" } ?? "Check sky")
+            MetricView(title: "SUNSET", value: snapshot.sky.sunset, detail: "Moonrise \(snapshot.sky.moonrise)")
         }
     }
 
@@ -116,7 +125,7 @@ struct TargetRow: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 3) {
                 Text("\(Int(plan.altitude.rounded())) DEG \(plan.direction)").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.text)
-                Text("\(plan.start.astroTime) - \(plan.integrationMinutes) MIN").font(.caption2).foregroundStyle(AstroTheme.muted)
+                Text("\(plan.start.astroTime) - \(plan.sessionMinutes) MIN SESSION").font(.caption2).foregroundStyle(AstroTheme.muted)
             }
         }
         .padding(11)

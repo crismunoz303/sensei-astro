@@ -7,17 +7,17 @@ weather and Moon data, and target-specific suggested capture instructions.
 
 ## Build status
 
-This is source code, NOT an installable IPA. Xcode and Swift are unavailable
-in the authoring environment. Native compilation, simulator layout tests,
-device tests and App+ installation have NOT been completed.
+This repository produces an unsigned IPA for signing with the user's existing
+App+ workflow. GitHub Actions compiles the app and runs deterministic planner
+tests before packaging. Physical-device testing and App+ installation still
+require the user's iPhone.
 
 ## Build workflow
 
 Upload this folder's contents to a dedicated GitHub repository, retaining
 project.yml at its root and the .github/workflows directory.
-Run Actions > Build Sensei Astro > Run workflow. The workflow generates an
-Xcode project and attempts an unsigned iPhone build, then uploads the IPA.
-No workflow has been run yet. A successful build is required before signing.
+Every push to main (or a manual Actions run) generates the Xcode project, runs
+the tests, compiles an unsigned iPhone build, and uploads the IPA artifact.
 
 Build tools: https://github.com/yonaskolb/XcodeGen
 Artifacts: https://github.com/actions/upload-artifact
@@ -31,16 +31,12 @@ the Open App action with Seestar selected.
 
 ## Accuracy work still required before release
 
-- Replace the civil-twilight/fixed-hour fallback with validated astronomical
-  darkness intervals, including polar and date-boundary cases.
-- Rank continuous usable capture windows, not just individual peak samples.
-- Exclude elapsed windows when opened partway through the night.
 - Validate Moon coordinates, horizon effects, target catalog coordinates,
   S30 Pro framing and settings against authoritative sources and live equipment.
 - Separate accepted integration from elapsed session duration and mosaic time.
 - Validate weather time zones and incomplete/null response handling.
 - Add persistent offline cache with visible age and source status.
-- Add automated astronomy/decoding tests and simulator/device UI tests.
+- Add API decoding fixtures and simulator/device UI tests.
 - Finish app icon, accessibility and small-screen layout review.
 
 Current scores are heuristic, Moon coordinates approximate, and durations
