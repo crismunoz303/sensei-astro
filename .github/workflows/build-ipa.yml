@@ -22,9 +22,9 @@ jobs:
       - name: Package unsigned app
         run: |
           set -euo pipefail
-          test -d 'build/Build/Products/Release-iphoneos/Sensei Astro.app'
+          test -d 'build/Build/Products/Release-iphoneos/SenseiAstro.app'
           mkdir -p package/Payload
-          cp -R 'build/Build/Products/Release-iphoneos/Sensei Astro.app' package/Payload/
+          cp -R 'build/Build/Products/Release-iphoneos/SenseiAstro.app' package/Payload/
           cd package
           zip -r ../Sensei-Astro-unsigned.ipa Payload
       - uses: actions/upload-artifact@v4
