@@ -41,6 +41,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sensei.astro.tests
         GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Sensei Astro.app/Sensei Astro"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   SenseiAstro:
     build:
