@@ -30,26 +30,3 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
-  SenseiAstroTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: SenseiAstroTests
-    dependencies:
-      - target: SenseiAstro
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sensei.astro.tests
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Sensei Astro.app/Sensei Astro"
-        BUNDLE_LOADER: "$(TEST_HOST)"
-schemes:
-  SenseiAstro:
-    build:
-      targets:
-        SenseiAstro: all
-        SenseiAstroTests: [test]
-    test:
-      gatherCoverageData: true
-      targets:
-        - SenseiAstroTests

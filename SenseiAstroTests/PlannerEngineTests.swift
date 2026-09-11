@@ -1,5 +1,5 @@
 import XCTest
-@testable import SenseiAstro
+@testable import SenseiAstroCore
 
 final class PlannerEngineTests: XCTestCase {
     private let coordinate = AstroCoordinate.huntingtonPark
