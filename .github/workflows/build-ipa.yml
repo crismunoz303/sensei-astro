@@ -1,0 +1,30 @@
+name: Build Sensei Astro
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: Compile for iPhone
+        run: |
+          set -euo pipefail
+          xcodebuild -project SenseiAstro.xcodeproj -scheme SenseiAstro -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package unsigned app
+        run: |
+          set -euo pipefail
+          test -d 'build/Build/Products/Release-iphoneos/Sensei Astro.app'
+          mkdir -p package/Payload
+          cp -R 'build/Build/Products/Release-iphoneos/Sensei Astro.app' package/Payload/
+          cd package
+          zip -r ../Sensei-Astro-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sensei-Astro-unsigned
+          path: Sensei-Astro-unsigned.ipa
+          if-no-files-found: error

@@ -1,0 +1,32 @@
+name: SenseiAstro
+options:
+  bundleIdPrefix: com.sensei
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+targets:
+  SenseiAstro:
+    type: application
+    platform: iOS
+    sources:
+      - path: SenseiAstro/App
+        excludes:
+          - Info.plist
+      - path: SenseiAstro/Shared
+      - path: SenseiAstro/UI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sensei.astro
+        PRODUCT_MODULE_NAME: SenseiAstro
+        PRODUCT_NAME: Sensei Astro
+        INFOPLIST_FILE: SenseiAstro/App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
