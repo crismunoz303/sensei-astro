@@ -41,3 +41,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sensei.astro.tests
         GENERATE_INFOPLIST_FILE: YES
+schemes:
+  SenseiAstro:
+    build:
+      targets:
+        SenseiAstro: all
+        SenseiAstroTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - SenseiAstroTests
