@@ -209,10 +209,12 @@ enum MoonMath {
 enum SolarMath {
     static func astronomicalNight(base: Date, coordinate: AstroCoordinate) -> (start: Date, end: Date)? {
         let calendar = Calendar.current
-        guard let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: base),
-              let followingNoon = calendar.date(byAdding: .day, value: 1, to: noon) else { return nil }
+        guard let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: base) else { return nil }
+        let searchEnd = noon.addingTimeInterval(36 * 3600)
 
-        let crossings = altitudeCrossings(from: noon, to: followingNoon, coordinate: coordinate, threshold: -18)
+        // A 36-hour search remains correct when the device timezone differs from
+        // the observing longitude, while still selecting one evening/morning pair.
+        let crossings = altitudeCrossings(from: noon, to: searchEnd, coordinate: coordinate, threshold: -18)
         guard let start = crossings.first(where: { !$0.rising }),
               let end = crossings.first(where: { $0.rising && $0.date > start.date }) else { return nil }
         return (start.date, end.date)

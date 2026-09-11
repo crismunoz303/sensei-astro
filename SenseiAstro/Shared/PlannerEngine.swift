@@ -11,8 +11,8 @@ enum PlannerEngine {
     }
 
     static func rank(_ targets: [AstroTarget], coordinate: AstroCoordinate, sky: SkyContext, now: Date = Date()) -> [CapturePlan] {
-        let planningStart = now > sky.start && now < sky.end ? now : sky.start
-        guard planningStart < sky.end else { return [] }
+        guard now < sky.end else { return [] }
+        let planningStart = max(now, sky.start)
         var samples: [Date] = []
         var cursor = planningStart
         while cursor <= sky.end {
