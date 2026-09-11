@@ -26,7 +26,7 @@ struct RootView: View {
         .task {
             store.start()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .minutes(15))
+                try? await Task.sleep(for: .seconds(900))
                 await store.refreshIfStale()
             }
         }

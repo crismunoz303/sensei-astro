@@ -59,8 +59,14 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         if Date().timeIntervalSince(lastRefreshAttempt) >= maxAge { await refresh() }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let latest = locations.last else { return }
+        Task { @MainActor [weak self] in
+            self?.handleLocation(latest)
+        }
+    }
+
+    private func handleLocation(_ latest: CLLocation) {
         coordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
         let fallbackDistance = latest.distance(from: CLLocation(latitude: AstroCoordinate.huntingtonPark.latitude, longitude: AstroCoordinate.huntingtonPark.longitude))
         locationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK" : "CURRENT LOCATION"
@@ -75,7 +81,9 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        locationName = "HUNTINGTON PARK"
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor [weak self] in
+            self?.locationName = "HUNTINGTON PARK"
+        }
     }
 }
