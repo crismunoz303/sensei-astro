@@ -20,7 +20,7 @@ enum AstroData {
 
 private extension SkyContext {
     func withWeather(_ points: [WeatherPoint]) -> SkyContext {
-        SkyContext(start: start, end: end, moonPhase: moonPhase, moonIllumination: moonIllumination, moonrise: moonrise, moonset: moonset, sunset: sunset, weather: points, sourceOnline: sourceOnline && !points.isEmpty)
+        SkyContext(start: start, end: end, moonPhase: moonPhase, moonIllumination: moonIllumination, moonrise: moonrise, moonset: moonset, sunset: sunset, darknessLabel: darknessLabel, weather: points, sourceOnline: sourceOnline && !points.isEmpty)
     }
 }
 
