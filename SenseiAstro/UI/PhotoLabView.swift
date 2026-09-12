@@ -37,7 +37,7 @@ struct PhotoLabView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Image(systemName: "camera.aperture").font(.system(size: 38)).foregroundStyle(AstroTheme.red)
                                 Text("Start with your original").font(.title2.bold())
-                                Text("Import a photo or a Seestar image export. Your source is saved unchanged; every edit is a separate recipe.")
+                        Text("Import a photo or Seestar image export. It is measured and given a conservative starting edit automatically; your source is saved unchanged.")
                                 Text("JPEG, PNG, HEIC and single-image TIFF · up to 25 MP / 100 MB. FITS and RAW are not supported in this build.").font(.caption).foregroundStyle(AstroTheme.muted)
                             }
                         }
@@ -133,7 +133,7 @@ struct PhotoLabView: View {
                 if let advice = lab.advice {
                     ForEach(advice.reasons, id: \.self) { Text($0).font(.subheadline) }
                     ForEach(advice.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(AstroTheme.amber) }
-                    Button("Apply suggested starting point") { lab.applyAdvice() }.buttonStyle(LabActionStyle(primary: true)).accessibilityIdentifier("applyAdvice")
+                    Button("Reapply measured starting point") { lab.applyAdvice() }.buttonStyle(LabActionStyle(primary: true)).accessibilityIdentifier("applyAdvice")
                 }
                 Text("Recommendations use measured pixels and conservative rules. They are not a trained AI specialist or a guarantee of the best edit.")
                     .font(.caption2).foregroundStyle(AstroTheme.muted)

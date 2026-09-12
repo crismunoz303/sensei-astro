@@ -40,11 +40,11 @@ final class PhotoLabStore: ObservableObject {
                 let renderer = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 240))
                 let image = renderer.image { context in
                     for x in 0..<320 {
-                        UIColor(white: CGFloat(x+10)/800, alpha: 1).setFill()
+                        UIColor(white: CGFloat(x+10)/1600, alpha: 1).setFill()
                         context.fill(CGRect(x: x, y: 0, width: 1, height: 240))
                     }
                 }
-                if let bytes = image.pngData() { try await install(pipeline.importData(bytes)) }
+                if let bytes = image.pngData() { try await install(pipeline.importData(bytes), automaticStart: true) }
                 return
             }
             #endif
@@ -58,7 +58,7 @@ final class PhotoLabStore: ObservableObject {
         defer { operation = nil }
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { throw LabError.invalid("Photos did not provide an image. Try Files or download the image from iCloud first.") }
-            try await install(pipeline.importData(data))
+            try await install(pipeline.importData(data), automaticStart: true)
         } catch { self.error = error.localizedDescription }
     }
 
@@ -74,7 +74,7 @@ final class PhotoLabStore: ObservableObject {
                 guard size <= 100 * 1024 * 1024 else { throw LabError.invalid("Choose an image smaller than 100 MB.") }
                 return try Data(contentsOf: url)
             }.value
-            try await install(pipeline.importData(data))
+            try await install(pipeline.importData(data), automaticStart: true)
         } catch { self.error = error.localizedDescription }
     }
 
@@ -86,13 +86,22 @@ final class PhotoLabStore: ObservableObject {
         catch { self.error = error.localizedDescription }
     }
 
-    private func install(_ loaded: LabLoadedPhoto) async throws {
+    private func install(_ loaded: LabLoadedPhoto, automaticStart: Bool = false) async throws {
         previewTask?.cancel(); revision = UUID(); installing = true
         project = loaded.project
         original = UIImage(cgImage: loaded.preview); edited = original
         before = loaded.measurement; after = loaded.measurement
-        recipe = loaded.project.recipe.bounded; intent = loaded.project.intent
-        undoStack = []; redoStack = []; exportResult = nil; originalExport = nil; message = nil
+        intent = loaded.project.intent
+        message = nil
+        if automaticStart && !loaded.project.recipe.hasAdjustments {
+            recipe = PhotoAdvice.make(loaded.measurement, intent: intent).recipe
+            message = recipe.hasAdjustments
+                ? "Measured starting edit applied automatically. Your original remains unchanged."
+                : "Analysis found no safe automatic improvement, so the image remains neutral."
+        } else {
+            recipe = loaded.project.recipe.bounded
+        }
+        undoStack = []; redoStack = []; exportResult = nil; originalExport = nil
         installing = false
         projects = try await pipeline.projects()
         schedulePreview()

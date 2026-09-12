@@ -6,8 +6,8 @@ conventional photo processing while preserving the imported source bytes.
 
 ## Version 1.3.0
 
-True Edit now keeps recoverable projects, suggests edits from measured image
-statistics, supports undo and comparison, protects bright source pixels, and
+True Edit now keeps recoverable projects, applies a conservative starting edit
+from measured image statistics, supports undo and comparison, protects bright source pixels, and
 offers both preview zoom and source-resolution detail inspection. It exports
 full-resolution PNG or 16-bit TIFF with a reproducible JSON edit record, and
 reports Photos saves only after PhotoKit confirms them.

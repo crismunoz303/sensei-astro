@@ -8,6 +8,8 @@ final class PhotoFlowUITests: XCTestCase {
         app.launch()
         let compare = app.buttons["compareOriginal"]
         XCTAssertTrue(compare.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["EDITED PREVIEW"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Measured starting edit applied automatically. Your original remains unchanged."].exists)
         attach(app, "01-editor")
         compare.tap()
         XCTAssertTrue(app.staticTexts["ORIGINAL"].exists)

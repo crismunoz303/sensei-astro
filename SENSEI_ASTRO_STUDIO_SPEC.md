@@ -12,7 +12,8 @@ Andromeda icon. The user operates the telescope in the Seestar app.
 - Save recipes atomically and recover the most recent project on relaunch.
 - Start neutral. Measure a sampled sRGB histogram, median, percentile 99,
   near-clipping, regional brightness spread and fine variation.
-- Offer explanations and require a tap before applying suggested adjustments.
+- Apply a conservative measured starting recipe on first import and explain it.
+  The user can compare, undo, reset, or refine it before export.
 - Astro advice never infers light pollution from color or treats all dark sky
   as underexposure. Fine variation is not called pure noise or scientific SNR.
 - Exposure, midtone curve, contrast, saturation, relative red/blue adjustment;
