@@ -322,9 +322,9 @@ actor PhotoPipeline {
                 let background = zip(plan.backgroundCoefficients[channel], basis).reduce(0) { $0 + $1.0 * $1.1 }
                 correction[i + channel] = Float(plan.backgroundReference[channel] - background)
             }
-            // CIAdditionCompositing expects an opaque correction field. A zero
-            // alpha field can discard its RGB correction after premultiplication.
-            correction[i + 3] = 1
+            // Keep the correction field transparent so addition preserves the
+            // source alpha instead of replacing it with an opaque foreground.
+            correction[i + 3] = 0
         } }
         let correctionData = correction.withUnsafeBytes { Data($0) }
         var field = CIImage(bitmapData: correctionData, bytesPerRow: gridWidth * 4 * MemoryLayout<Float>.size,
