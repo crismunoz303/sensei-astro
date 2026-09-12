@@ -104,7 +104,7 @@ final class PhotoLabStore: ObservableObject {
         undoStack = []; redoStack = []; exportResult = nil; originalExport = nil
         installing = false
         projects = try await pipeline.projects()
-        schedulePreview()
+        schedulePreview(preserveMessage: automaticStart)
     }
 
     func rememberAdjustment() {
@@ -123,10 +123,11 @@ final class PhotoLabStore: ObservableObject {
         return p
     }
 
-    private func schedulePreview() {
+    private func schedulePreview(preserveMessage: Bool = false) {
         guard let p = snapshot() else { return }
         previewTask?.cancel(); let ticket = UUID(); revision = ticket
-        rendering = true; previewCurrent = false; exportResult = nil; message = nil
+        rendering = true; previewCurrent = false; exportResult = nil
+        if !preserveMessage { message = nil }
         previewTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(180))
