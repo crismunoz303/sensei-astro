@@ -16,13 +16,16 @@ final class PhotoAnalysisTests: XCTestCase {
         } }
         let plan = try XCTUnwrap(AstroAutoPlan.analyze(rgba: rgba, width: width, height: height))
         XCTAssertEqual(plan.backgroundCoefficients.count, 3)
-        XCTAssertTrue(plan.backgroundCoefficients.allSatisfy { $0.count == 6 && $0.allSatisfy(\.isFinite) })
+        XCTAssertTrue(plan.backgroundCoefficients.allSatisfy { $0.count == 10 && $0.allSatisfy(\.isFinite) })
         XCTAssertEqual(plan.channelGains.count, 3)
         XCTAssertTrue(plan.channelGains.allSatisfy { (0.75...1.35).contains($0) })
         XCTAssertGreaterThan(plan.whitePoint, plan.blackPoint)
         XCTAssertTrue((0.68...0.96).contains(plan.gamma))
         XCTAssertGreaterThanOrEqual(plan.sampledTiles, 20)
-        XCTAssertTrue(plan.operations.joined().contains("quadratic background"))
+        XCTAssertEqual(plan.planVersion, 2)
+        XCTAssertTrue((0.48...1.12).contains(try XCTUnwrap(plan.displayGain)))
+        XCTAssertLessThanOrEqual(plan.blackPoint, max(0, plan.skyLevel - 2.4 * plan.skySigma) + 0.000_001)
+        XCTAssertTrue(plan.operations.joined().contains("cubic background"))
     }
     func testBlackSkyDoesNotTriggerAutomaticExposure() throws {
         let m = try XCTUnwrap(PhotoMeasurement.measure(rgba: Array(repeating: [UInt8(0),0,0,255], count: 64).flatMap { $0 }, width: 8, height: 8))
@@ -145,6 +148,8 @@ final class PhotoPipelineTests: XCTestCase {
         XCTAssertNotEqual(developed.image.dataProvider?.data as Data?, neutral.image.dataProvider?.data as Data?)
         XCTAssertEqual(neutral.image.width, p.width)
         XCTAssertEqual(neutral.image.height, p.height)
+        XCTAssertLessThan(developed.measurement.crushedBlacks, 0.08,
+            "Automatic development must not repeat the prior crushed-sky failure.")
     }
 
     func testEveryConventionalOperationCanRenderWithoutChangingGeometry() async throws {

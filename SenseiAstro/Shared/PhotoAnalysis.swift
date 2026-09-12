@@ -112,8 +112,8 @@ struct PhotoMeasurement: Codable, Equatable {
 }
 
 /// A deterministic, source-measured astrophotography development plan.
-/// Coefficients model the large-scale sRGB background as
-/// 1, x, y, x², xy, y². Nothing here can synthesize image content.
+/// Coefficients model the large-scale sRGB background as a robust cubic surface.
+/// Nothing here can synthesize image content.
 struct AstroAutoPlan: Codable, Equatable {
     let backgroundCoefficients: [[Double]]
     let backgroundReference: [Double]
@@ -127,14 +127,16 @@ struct AstroAutoPlan: Codable, Equatable {
     let skyLevel: Double
     let skySigma: Double
     let sampledTiles: Int
+    let displayGain: Double?
+    let planVersion: Int?
 
     var operations: [String] {
         let gainText = channelGains.map { String(format: "%.3f", $0) }.joined(separator: ", ")
         return [
-            "Sigma-clipped quadratic background model from \(sampledTiles) low-signal tiles",
+            "Sigma-clipped cubic background model from \(sampledTiles) sky tiles",
             "Per-channel sky neutralization; gains \(gainText)",
             String(format: "Measured black/white normalization: %.4f / %.4f", blackPoint, whitePoint),
-            String(format: "Controlled nonlinear stretch: gamma %.3f", gamma),
+            String(format: "Controlled nonlinear stretch: gamma %.3f, display gain %.3f", gamma, displayGain ?? 1),
             String(format: "Background-masked conventional noise reduction: %.4f", noiseLevel),
             String(format: "Star-protected local contrast: %.3f", localContrast),
             String(format: "Highlight-safe color enhancement: %.3f", saturation),
@@ -145,7 +147,7 @@ struct AstroAutoPlan: Codable, Equatable {
         guard width >= 24, height >= 24, width <= 2048, height <= 2048,
               rgba.count == width * height * 4 else { return nil }
         let columns = 18, rows = 12
-        struct Tile { let x, y: Double; let rgb: [Double]; let luma: Double }
+        struct Tile { let x, y: Double; let rgb: [Double] }
         var tiles: [Tile] = []
         for ty in 0..<rows { for tx in 0..<columns {
             let x0 = tx * width / columns, x1 = max(x0 + 1, (tx + 1) * width / columns)
@@ -162,34 +164,37 @@ struct AstroAutoPlan: Codable, Equatable {
                 }
             }
             guard channels[0].count >= 8 else { continue }
-            let rgb = channels.map { percentile($0.sorted(), 0.5) }
-            let l = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-            tiles.append(Tile(x: (Double(tx) + 0.5) / Double(columns), y: (Double(ty) + 0.5) / Double(rows), rgb: rgb, luma: l))
+            // Lower tile percentile resists compact stars and bright nebula knots.
+            let rgb = channels.map { percentile($0.sorted(), 0.28) }
+            tiles.append(Tile(x: (Double(tx) + 0.5) / Double(columns), y: (Double(ty) + 0.5) / Double(rows), rgb: rgb))
         } }
         guard tiles.count >= 30 else { return nil }
-        let ordered = tiles.sorted { $0.luma < $1.luma }
-        var selected = Array(ordered.prefix(max(24, Int(Double(ordered.count) * 0.42))))
+        var selected = tiles
         var coefficients = (0..<3).map { channel in
             fit(selected.map { ($0.x, $0.y, $0.rgb[channel]) })
         }
-        guard coefficients.allSatisfy({ $0.count == 6 }) else { return nil }
+        guard coefficients.allSatisfy({ $0.count == 10 }) else { return nil }
 
-        // Reject bright nebulosity, stars and residual hot tiles by model residual, then refit.
-        for _ in 0..<2 {
+        // Asymmetric rejection removes bright source signal while retaining the
+        // full-frame gradient needed to model strong lower-edge sky glow.
+        for _ in 0..<4 {
             let residuals = selected.map { tile -> Double in
                 let predicted = (0..<3).map { evaluate(coefficients[$0], tile.x, tile.y) }
-                return abs((0.2126 * (tile.rgb[0] - predicted[0]) + 0.7152 * (tile.rgb[1] - predicted[1]) + 0.0722 * (tile.rgb[2] - predicted[2])))
+                return 0.2126 * (tile.rgb[0] - predicted[0]) + 0.7152 * (tile.rgb[1] - predicted[1]) + 0.0722 * (tile.rgb[2] - predicted[2])
             }
             let med = percentile(residuals.sorted(), 0.5)
             let mad = percentile(residuals.map { abs($0 - med) }.sorted(), 0.5) + 1.0 / 4096
-            let kept = zip(selected, residuals).filter { $0.1 <= med + 3.5 * 1.4826 * mad }.map(\.0)
-            if kept.count >= 20 { selected = kept }
+            let sigma = 1.4826 * mad
+            let kept = zip(selected, residuals).filter { $0.1 < med + 2.35*sigma && $0.1 > med - 4.2*sigma }.map(\.0)
+            if kept.count >= 24 { selected = kept }
             coefficients = (0..<3).map { channel in fit(selected.map { ($0.x, $0.y, $0.rgb[channel]) }) }
         }
 
-        let center = (0..<3).map { min(0.8, max(0, evaluate(coefficients[$0], 0.5, 0.5))) }
-        let neutral = percentile(center.sorted(), 0.5)
-        let gains = center.map { min(1.35, max(0.75, neutral / max($0, 1.0 / 255))) }
+        let reference = (0..<3).map { channel in
+            percentile(tiles.map { evaluate(coefficients[channel], $0.x, $0.y) }.sorted(), 0.5)
+        }.map { min(0.8, max(0, $0)) }
+        let neutral = percentile(reference.sorted(), 0.5)
+        let gains = reference.map { min(1.28, max(0.78, neutral / max($0, 1.0 / 255))) }
         var luminance: [Double] = []
         luminance.reserveCapacity(min(width * height, 300_000))
         let step = max(1, Int(sqrt(Double(width * height) / 250_000)))
@@ -201,7 +206,7 @@ struct AstroAutoPlan: Codable, Equatable {
                 var c = [Double](repeating: 0, count: 3)
                 for channel in 0..<3 {
                     let raw = Double(rgba[i + channel]) / 255
-                    c[channel] = max(0, (raw - evaluate(coefficients[channel], x, y) + center[channel]) * gains[channel])
+                    c[channel] = max(0, (raw - evaluate(coefficients[channel], x, y) + reference[channel]) * gains[channel])
                 }
                 luminance.append(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
             }
@@ -211,43 +216,51 @@ struct AstroAutoPlan: Codable, Equatable {
         let skyPool = Array(sorted.prefix(max(50, Int(Double(sorted.count) * 0.58))))
         let sky = percentile(skyPool, 0.5)
         let sigma = 1.4826 * percentile(skyPool.map { abs($0 - sky) }.sorted(), 0.5)
-        let black = min(sky * 0.88, max(0, min(percentile(sorted, 0.012), sky - 2.15 * sigma)))
-        let white = max(black + 0.25, min(1, max(0.72, percentile(sorted, 0.9995))))
+        let black = max(0, min(percentile(sorted, 0.0025), sky - 2.45 * sigma))
+        let white = max(black + 0.25, min(1, max(0.72, percentile(sorted, 0.9996))))
         let headroom = max(0, 1 - percentile(sorted, 0.999))
-        let gamma = min(0.90, max(0.74, 0.84 - min(0.08, max(0, (0.11 - sky) * 0.45))))
-        return AstroAutoPlan(backgroundCoefficients: coefficients, backgroundReference: center,
+        let gamma = min(0.90, max(0.76, 0.83 - min(0.05, max(0, (0.11 - sky) * 0.32))))
+        let normalizedSky = max(0.0001, min(1, (sky-black)/(white-black)))
+        let predictedSky = pow(normalizedSky, gamma)
+        let displayGain = min(1.12, max(0.48, 0.062 / predictedSky))
+        return AstroAutoPlan(backgroundCoefficients: coefficients, backgroundReference: reference,
             channelGains: gains, blackPoint: black, whitePoint: white, gamma: gamma,
-            noiseLevel: min(0.035, max(0.006, sigma * 0.55)),
-            localContrast: headroom < 0.02 ? 0.12 : 0.22,
-            saturation: headroom < 0.02 ? 1.08 : 1.16,
-            skyLevel: sky, skySigma: sigma, sampledTiles: selected.count)
+            noiseLevel: min(0.04, max(0.01, sigma * 0.9)),
+            localContrast: headroom < 0.02 ? 0.18 : 0.30,
+            saturation: headroom < 0.02 ? 1.14 : 1.28,
+            skyLevel: sky, skySigma: sigma, sampledTiles: selected.count,
+            displayGain: displayGain, planVersion: 2)
     }
 
     private static func evaluate(_ c: [Double], _ x: Double, _ y: Double) -> Double {
-        guard c.count == 6 else { return 0 }
-        return c[0] + c[1] * x + c[2] * y + c[3] * x * x + c[4] * x * y + c[5] * y * y
+        zip(c, basis(x, y)).reduce(0) { $0 + $1.0*$1.1 }
     }
 
     private static func fit(_ samples: [(Double, Double, Double)]) -> [Double] {
-        var a = Array(repeating: Array(repeating: 0.0, count: 7), count: 6)
+        let count = 10
+        var a = Array(repeating: Array(repeating: 0.0, count: count+1), count: count)
         for (x, y, value) in samples {
-            let v = [1.0, x, y, x*x, x*y, y*y]
-            for r in 0..<6 {
-                for c in 0..<6 { a[r][c] += v[r] * v[c] }
-                a[r][6] += v[r] * value
+            let v = basis(x, y)
+            for r in 0..<count {
+                for c in 0..<count { a[r][c] += v[r] * v[c] }
+                a[r][count] += v[r] * value
             }
         }
-        for pivot in 0..<6 {
-            guard let row = (pivot..<6).max(by: { abs(a[$0][pivot]) < abs(a[$1][pivot]) }), abs(a[row][pivot]) > 1e-10 else { return [] }
+        for pivot in 0..<count {
+            guard let row = (pivot..<count).max(by: { abs(a[$0][pivot]) < abs(a[$1][pivot]) }), abs(a[row][pivot]) > 1e-10 else { return [] }
             if row != pivot { a.swapAt(row, pivot) }
             let d = a[pivot][pivot]
-            for c in pivot..<7 { a[pivot][c] /= d }
-            for r in 0..<6 where r != pivot {
+            for c in pivot...count { a[pivot][c] /= d }
+            for r in 0..<count where r != pivot {
                 let m = a[r][pivot]
-                for c in pivot..<7 { a[r][c] -= m * a[pivot][c] }
+                for c in pivot...count { a[r][c] -= m * a[pivot][c] }
             }
         }
-        return a.map { $0[6] }
+        return a.map { $0[count] }
+    }
+
+    private static func basis(_ x: Double, _ y: Double) -> [Double] {
+        [1, x, y, x*x, x*y, y*y, x*x*x, x*x*y, x*y*y, y*y*y]
     }
 
     private static func percentile(_ values: [Double], _ q: Double) -> Double {

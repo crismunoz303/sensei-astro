@@ -1,4 +1,4 @@
-# Sensei Astro Studio 1.4.0
+# Sensei Astro Studio 1.5.0
 
 Native iPhone companion for Seestar S30 Pro capture planning and conventional,
 original-preserving photo editing. Red/dark interface and Sensei's existing
@@ -12,6 +12,10 @@ Andromeda icon. The user operates the telescope in the Seestar app.
 - Save recipes atomically and recover the most recent project on relaunch.
 - Start neutral. Measure a sampled sRGB histogram, median, percentile 99,
   near-clipping, regional brightness spread and fine variation.
+- Build a versioned automatic plan on first import: robust cubic background
+  correction, per-channel sky neutralization, conservative endpoint placement,
+  measured display gain, two-stage low-signal denoise, protected multiscale
+  contrast and signal-masked color enhancement. Reanalyze older plans on open.
 - Apply a conservative measured starting recipe on first import and explain it.
   The user can compare, undo, reset, or refine it before export.
 - Astro advice never infers light pollution from color or treats all dark sky
@@ -64,8 +68,8 @@ Conventional processing can still suppress detail or create artifacts; the
 original remains recoverable and comparisons are provided.
 
 Import is limited to 25 MP / 100 MB. FITS calibration/stacking, Bayer demosaicing,
-camera RAW development, scientific color calibration, star classification,
-gradient subtraction and learned personal preferences remain future work.
+camera RAW development, scientific color calibration, physical star
+classification and learned personal preferences remain future work.
 16-bit output cannot recover lost input precision. sRGB export is not an HDR or
 wide-gamut archival workflow. Do not delete the app without backing up projects.
 

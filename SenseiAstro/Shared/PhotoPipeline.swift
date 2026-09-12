@@ -72,7 +72,7 @@ actor PhotoPipeline {
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private var cachedPreview: (UUID, CGImage)?
     private let manager = FileManager.default
-    static let engineVersion = "astro-develop-1.4.0"
+    static let engineVersion = "astro-develop-1.5.0"
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -135,7 +135,8 @@ actor PhotoPipeline {
         let preview = try thumbnail(source, maxPixel: 1400)
         let analysis = try analyze(preview)
         var upgraded = project
-        if upgraded.astroPlan == nil {
+        if upgraded.astroPlan?.planVersion != 2 ||
+            upgraded.astroPlan?.backgroundCoefficients.allSatisfy({ $0.count == 10 }) != true {
             upgraded.astroPlan = analysis.plan
             upgraded.automaticProcessingDisabled = false
             upgraded.updated = Date()
@@ -305,7 +306,7 @@ actor PhotoPipeline {
 
     private func automaticDevelop(_ source: CIImage, plan: AstroAutoPlan) throws -> CIImage {
         guard plan.backgroundCoefficients.count == 3,
-              plan.backgroundCoefficients.allSatisfy({ $0.count == 6 }),
+              plan.backgroundCoefficients.allSatisfy({ $0.count == 10 }),
               plan.backgroundReference.count == 3, plan.channelGains.count == 3 else {
             throw LabError.invalid("The saved automatic processing plan is invalid. Your original is safe.")
         }
@@ -314,13 +315,16 @@ actor PhotoPipeline {
         for y in 0..<gridHeight { for x in 0..<gridWidth {
             let nx = (Double(x) + 0.5) / Double(gridWidth)
             let ny = 1 - (Double(y) + 0.5) / Double(gridHeight)
-            let basis = [1.0, nx, ny, nx*nx, nx*ny, ny*ny]
+            let basis = [1.0, nx, ny, nx*nx, nx*ny, ny*ny,
+                nx*nx*nx, nx*nx*ny, nx*ny*ny, ny*ny*ny]
             let i = (y * gridWidth + x) * 4
             for channel in 0..<3 {
                 let background = zip(plan.backgroundCoefficients[channel], basis).reduce(0) { $0 + $1.0 * $1.1 }
                 correction[i + channel] = Float(plan.backgroundReference[channel] - background)
             }
-            correction[i + 3] = 0
+            // CIAdditionCompositing expects an opaque correction field. A zero
+            // alpha field can discard its RGB correction after premultiplication.
+            correction[i + 3] = 1
         } }
         let correctionData = correction.withUnsafeBytes { Data($0) }
         var field = CIImage(bitmapData: correctionData, bytesPerRow: gridWidth * 4 * MemoryLayout<Float>.size,
@@ -346,14 +350,25 @@ actor PhotoPipeline {
         }
         result = normalized.cropped(to: source.extent)
 
-        // Denoise only the low-signal background. Bright source structures stay untouched.
+        // Two restrained conventional denoise passes target only the low-signal
+        // background. Nebulae and star cores are restored through measured masks.
         if plan.noiseLevel > 0,
            let denoised = CIFilter(name: "CINoiseReduction", parameters: [kCIInputImageKey: result,
-                "inputNoiseLevel": min(0.04, plan.noiseLevel), "inputSharpness": 0.08])?.outputImage,
-           let mask = intensityMask(result, low: 0.18, high: 0.58, inverted: true),
+                "inputNoiseLevel": min(0.05, plan.noiseLevel * 1.15), "inputSharpness": 0.04])?.outputImage,
+           let secondPass = CIFilter(name: "CINoiseReduction", parameters: [kCIInputImageKey: denoised,
+                "inputNoiseLevel": min(0.035, plan.noiseLevel * 0.72), "inputSharpness": 0])?.outputImage,
+           let mask = intensityMask(result, low: 0.12, high: 0.42, inverted: true),
            let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: denoised,
                 kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
-            result = blended.cropped(to: source.extent)
+            // The second pass contributes only half strength, reducing chroma
+            // mottling without turning faint structures into waxy patches.
+            if let halfMask = scaledMask(mask, amount: 0.5),
+               let twiceBlended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: secondPass,
+                    kCIInputBackgroundImageKey: blended, kCIInputMaskImageKey: halfMask])?.outputImage {
+                result = twiceBlended.cropped(to: source.extent)
+            } else {
+                result = blended.cropped(to: source.extent)
+            }
         }
 
         guard let stretched = CIFilter(name: "CIGammaAdjust", parameters: [kCIInputImageKey: result,
@@ -362,11 +377,32 @@ actor PhotoPipeline {
         }
         result = stretched.cropped(to: source.extent)
 
-        // A broad unsharp pass increases real source contrast; a source-derived mask excludes star cores.
+        if let gain = plan.displayGain, gain.isFinite, gain != 1,
+           let balanced = CIFilter(name: "CIColorMatrix", parameters: [kCIInputImageKey: result,
+                "inputRVector": CIVector(x: min(1.12, max(0.48, gain)), y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: min(1.12, max(0.48, gain)), z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: min(1.12, max(0.48, gain)), w: 0)])?.outputImage {
+            result = balanced.cropped(to: source.extent)
+        }
+
+        // Separate fine and broad scales reveal existing structure. Both are
+        // source-masked so bright star cores cannot be sharpened into halos.
+        if let fine = CIFilter(name: "CIUnsharpMask", parameters: [kCIInputImageKey: result,
+            kCIInputRadiusKey: 1.15, kCIInputIntensityKey: 0.16])?.outputImage,
+           let fineMask = intensityMask(result, low: 0.10, high: 0.68, inverted: false),
+           let starProtection = intensityMask(result, low: 0.52, high: 0.84, inverted: true),
+           let activeMask = multipliedMask(fineMask, starProtection),
+           let fineBlend = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: fine,
+                kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: activeMask])?.outputImage {
+            result = fineBlend.cropped(to: source.extent)
+        }
+
         let radius = min(28.0, max(4.0, Double(max(source.extent.width, source.extent.height)) / 175.0))
         if let enhanced = CIFilter(name: "CIUnsharpMask", parameters: [kCIInputImageKey: result,
             kCIInputRadiusKey: radius, kCIInputIntensityKey: min(0.32, max(0, plan.localContrast))])?.outputImage,
-           let mask = intensityMask(result, low: 0.48, high: 0.82, inverted: true),
+           let signal = intensityMask(result, low: 0.055, high: 0.24, inverted: false),
+           let stars = intensityMask(result, low: 0.46, high: 0.80, inverted: true),
+           let mask = multipliedMask(signal, stars),
            let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: enhanced,
             kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
             result = blended.cropped(to: source.extent)
@@ -374,13 +410,28 @@ actor PhotoPipeline {
 
         if plan.saturation != 1,
            let colored = CIFilter(name: "CIColorControls", parameters: [kCIInputImageKey: result,
-            kCIInputSaturationKey: min(1.22, max(0.9, plan.saturation)), kCIInputContrastKey: 1.0])?.outputImage,
-           let mask = intensityMask(result, low: 0.58, high: 0.92, inverted: true),
+            kCIInputSaturationKey: min(1.32, max(0.9, plan.saturation)), kCIInputContrastKey: 1.0])?.outputImage,
+           let signal = intensityMask(result, low: 0.045, high: 0.20, inverted: false),
+           let highlights = intensityMask(result, low: 0.50, high: 0.88, inverted: true),
+           let mask = multipliedMask(signal, highlights),
            let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: colored,
             kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
             result = blended.cropped(to: source.extent)
         }
         return result
+    }
+
+    private func multipliedMask(_ first: CIImage, _ second: CIImage) -> CIImage? {
+        CIFilter(name: "CIMultiplyCompositing", parameters: [kCIInputImageKey: first,
+            kCIInputBackgroundImageKey: second])?.outputImage
+    }
+
+    private func scaledMask(_ mask: CIImage, amount: Double) -> CIImage? {
+        let value = min(1, max(0, amount))
+        return CIFilter(name: "CIColorMatrix", parameters: [kCIInputImageKey: mask,
+            "inputRVector": CIVector(x: value, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: value, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: value, w: 0)])?.outputImage
     }
 
     private func intensityMask(_ image: CIImage, low: Double, high: Double, inverted: Bool) -> CIImage? {
