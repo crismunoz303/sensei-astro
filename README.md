@@ -1,44 +1,45 @@
-# Sensei Astro — development checkpoint
+# Sensei Astro Studio
 
-Native SwiftUI iPhone planning companion for S30 Pro on a standard tripod. No widgets and no telescope control.
+Native SwiftUI iPhone companion for a Seestar S30 Pro on a standard tripod.
+Tonight and Targets provide locally ranked capture plans. True Edit provides
+conventional photo processing while preserving the imported source bytes.
 
-Includes a red tonight dashboard, 23 ranked targets, search, favorites,
-weather and Moon data, and target-specific suggested capture instructions.
-The app deliberately does not launch or operate Seestar. It produces a concise
-plan that the observer enters and follows in the official Seestar app.
+## Version 1.3.0
 
-## Build status
+True Edit now keeps recoverable projects, suggests edits from measured image
+statistics, supports undo and comparison, protects bright source pixels, and
+offers both preview zoom and source-resolution detail inspection. It exports
+full-resolution PNG or 16-bit TIFF with a reproducible JSON edit record, and
+reports Photos saves only after PhotoKit confirms them.
 
-This repository produces an unsigned IPA for signing with the user's existing
-App+ workflow. GitHub Actions compiles the app and runs deterministic planner
-tests before packaging. Physical-device testing and App+ installation still
-require the user's iPhone.
+The planner rejects stale/missing weather and sessions beyond astronomical
+darkness. It distinguishes estimated ranking from statistical confidence and
+does not invent night windows when calculation fails. No widget or direct
+telescope control is included.
 
-## Build workflow
+See [the specification](SENSEI_ASTRO_STUDIO_SPEC.md) for supported formats,
+integrity guarantees, technical limits, test coverage and primary references.
 
-Upload this folder's contents to a dedicated GitHub repository, retaining
-project.yml at its root and the .github/workflows directory.
-Every push to main (or a manual Actions run) generates the Xcode project, runs
-the tests, compiles an unsigned iPhone build, and uploads the IPA artifact.
+## Build and verification
 
-Build tools: https://github.com/yonaskolb/XcodeGen
-Artifacts: https://github.com/actions/upload-artifact
+Pushes to main run Shared SwiftPM image/planner tests on macOS, generate the
+Xcode project with XcodeGen, exercise the photo workflow in iPhone Simulator,
+compile an iPhone Release build and package an unsigned IPA. Test charts and
+automation launch hooks are DEBUG-only and absent from Release.
 
-App+ can import an IPA according to the user's screenshots, but installation
-of this app remains unverified. Turn off optional tweak injection and old-iOS
-modifications when testing. Do not enter credentials in the source.
+Workflow artifacts contain the IPA, simulator results and screenshots.
+Physical-device installation, PhotoKit permissions on the user's device,
+memory use with real large images and live Seestar results require device
+verification; simulator success does not establish those outcomes.
 
-## Accuracy work still required before release
+The IPA must be signed before installation. Keep the existing bundle identity
+when updating. The existing Andromeda icon is embedded in the app. Preserve
+independent source backups before deleting the app or changing its identity.
 
-- Validate Moon coordinates, horizon effects, target catalog coordinates,
-  S30 Pro framing and settings against authoritative sources and live equipment.
-- Separate accepted integration from elapsed session duration and mosaic time.
-- Validate weather time zones and incomplete/null response handling.
-- Add persistent offline cache with visible age and source status.
-- Add API decoding fixtures and simulator/device UI tests.
-- Finish app icon, accessibility and small-screen layout review.
+## Deliberate boundaries
 
-Current scores are heuristic, Moon coordinates approximate, and durations
-starting recommendations—not guaranteed optimal settings. No direct telescope
-control is implemented. Unknown weather now shows CHECK CONDITIONS, and sample
-placeholder targets are hidden while initial data loads.
+No trained AI specialist or image generator is bundled. FITS/RAW development,
+stacking/calibration, scientific noise estimation and learned editing preferences
+remain future work. Conventional filtering can alter fine detail, so inspection
+and recovery are built into the workflow. Planner scores and collection times
+are estimates, not promises of optimal results.

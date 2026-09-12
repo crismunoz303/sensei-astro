@@ -56,6 +56,14 @@ final class PlannerEngineTests: XCTestCase {
         XCTAssertEqual(points.first?.time.timeIntervalSince1970, 1789178400)
     }
 
+    func testOnePercentMoonIsNotMistakenForFullMoon() {
+        XCTAssertEqual(SkyClient.parseIllumination("1%"), 0.01)
+        XCTAssertEqual(SkyClient.parseIllumination("0.01"), 0.01)
+        XCTAssertEqual(SkyClient.parseIllumination("100%"), 1)
+        XCTAssertNil(SkyClient.parseIllumination("unknown"))
+        XCTAssertNil(SkyClient.parseIllumination("-1"))
+    }
+
     func testOfflineRankIsCappedBelowExcellent() throws {
         let start = date("2026-09-12T03:00:00Z")
         let end = start.addingTimeInterval(6 * 3600)

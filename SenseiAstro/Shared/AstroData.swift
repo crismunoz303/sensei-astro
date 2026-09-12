@@ -110,17 +110,12 @@ enum SkyClient {
         let (todayData, tomorrowData) = await (first, second)
 
         let computedDarkness = SolarMath.astronomicalNight(base: base, coordinate: coordinate)
-        let fallbackStart = eventDate(todayData?.sundata, matching: "end civil twilight", day: base)
-            ?? calendar.date(bySettingHour: 20, minute: 0, second: 0, of: base)!
-        let fallbackEnd = eventDate(tomorrowData?.sundata, matching: "begin civil twilight", day: next)
-            ?? calendar.date(bySettingHour: 5, minute: 30, second: 0, of: next)!
-        let start = computedDarkness?.start ?? fallbackStart
-        let end = computedDarkness?.end ?? fallbackEnd
+        // If a complete astronomical night cannot be calculated, do not invent
+        // an 8 PM–5:30 AM observing window (especially at polar latitudes).
+        let start = computedDarkness?.start ?? now
+        let end = computedDarkness?.end ?? now
         let moon = MoonMath.status(at: Date(timeIntervalSince1970: (start.timeIntervalSince1970 + end.timeIntervalSince1970) / 2))
-        let parsedIllumination = todayData?.fracillum.flatMap { raw -> Double? in
-            guard let number = Double(raw.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)) else { return nil }
-            return min(1, max(0, number > 1 ? number / 100 : number))
-        }
+        let parsedIllumination = todayData?.fracillum.flatMap(parseIllumination)
 
         return SkyContext(
             start: start,
@@ -130,10 +125,17 @@ enum SkyClient {
             moonrise: displayEvent(todayData?.moondata, matching: "rise"),
             moonset: displayEvent(todayData?.moondata, matching: "set"),
             sunset: displayEvent(todayData?.sundata, matching: "set"),
-            darknessLabel: computedDarkness == nil ? "CIVIL TWILIGHT FALLBACK" : "ASTRONOMICAL DARKNESS",
+            darknessLabel: computedDarkness == nil ? "NIGHT WINDOW UNAVAILABLE" : "ASTRONOMICAL DARKNESS",
             weather: [],
             sourceOnline: todayData != nil && tomorrowData != nil
         )
+    }
+
+    static func parseIllumination(_ raw: String) -> Double? {
+        guard let number = Double(raw.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)),
+              number.isFinite, number >= 0 else { return nil }
+        let fraction = raw.contains("%") || number > 1 ? number / 100 : number
+        return fraction <= 1 ? fraction : nil
     }
 
     private static func day(_ date: Date, coordinate: AstroCoordinate) async -> DayData? {
@@ -146,7 +148,7 @@ enum SkyClient {
             URLQueryItem(name: "date", value: dateFormatter.string(from: date)),
             URLQueryItem(name: "coords", value: String(format: "%.5f,%.5f", coordinate.latitude, coordinate.longitude)),
             URLQueryItem(name: "tz", value: String(format: "%.1f", timezone)),
-            URLQueryItem(name: "ID", value: "SenseiAstro")
+            URLQueryItem(name: "ID", value: "Sensei")
         ]
         do {
             let (data, response) = try await URLSession.shared.data(for: URLRequest(url: components.url!, timeoutInterval: 12))
@@ -165,7 +167,8 @@ enum SkyClient {
     }
 
     private static func displayEvent(_ events: [Event]?, matching text: String) -> String {
-        guard let event = events?.first(where: { $0.phen.lowercased() == text }) else { return "NONE" }
+        guard let events else { return "UNAVAILABLE" }
+        guard let event = events.first(where: { $0.phen.lowercased() == text }) else { return "NONE" }
         let input = DateFormatter()
         input.locale = Locale(identifier: "en_US_POSIX")
         input.dateFormat = "HH:mm"

@@ -14,7 +14,7 @@ final class PhotoFlowUITests: XCTestCase {
         app.buttons["inspectSource"].tap()
         XCTAssertTrue(app.buttons["Source detail"].waitForExistence(timeout: 5))
         app.buttons["Source detail"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "source-pixel region")).firstMatch.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "source-pixel region")).firstMatch.waitForExistence(timeout: 20))
         attach(app, "02-source-detail")
         app.buttons["Done"].tap()
         reveal(app.buttons["applyAdvice"], in: app)

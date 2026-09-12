@@ -26,6 +26,18 @@ jobs:
         with:
           name: Sensei-Astro-UI-results
           path: UIResults.xcresult
+      - name: Export simulator screenshots
+        if: always()
+        run: |
+          if [ -d UIResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path UIResults.xcresult --output-path UIScreenshots
+          fi
+      - name: Save simulator screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sensei-Astro-screenshots
+          path: UIScreenshots
       - name: Compile for iPhone
         run: |
           set -euo pipefail

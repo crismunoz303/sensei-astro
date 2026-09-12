@@ -164,13 +164,13 @@ struct TargetDetailView: View {
     private var shareText: String {
         """
         SENSEI ASTRO // \(plan.target.id) \(plan.target.name)
-        Session: \(plan.start.astroTime)-\(plan.end.astroTime) (peak \(plan.bestTime.astroTime))
+        Session: \(plan.start.astroTime)-\(plan.end.astroTime) (best sample \(plan.bestTime.astroTime))
         Goal: \(plan.integrationMinutes) accepted minutes in a \(plan.sessionMinutes)-minute session
         Position: \(Int(plan.altitude.rounded()))° \(plan.direction), azimuth \(Int(plan.azimuth.rounded()))°
         Filter: \(plan.filterText)
         Mount: standard tripod / Alt-Az
         Dew: \(plan.antiDewText)
-        Confidence: \(plan.confidenceText)
+        Forecast status: \(plan.confidenceText). Ranking is approximate.
         """
     }
 }
