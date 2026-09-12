@@ -216,7 +216,11 @@ struct AstroAutoPlan: Codable, Equatable {
         let skyPool = Array(sorted.prefix(max(50, Int(Double(sorted.count) * 0.58))))
         let sky = percentile(skyPool, 0.5)
         let sigma = 1.4826 * percentile(skyPool.map { abs($0 - sky) }.sorted(), 0.5)
-        let black = max(0, min(percentile(sorted, 0.0025), sky - 2.45 * sigma))
+        // Noise alone is not a safe black-point distance: a smooth or heavily
+        // compressed sky can have near-zero MAD. Keep a mandatory tonal gap so
+        // the measured sky cannot collapse to code value zero.
+        let skyGap = max(2.45 * sigma, max(2.0 / 255.0, sky * 0.06))
+        let black = max(0, min(percentile(sorted, 0.0025), sky - skyGap))
         let white = max(black + 0.25, min(1, max(0.72, percentile(sorted, 0.9996))))
         let headroom = max(0, 1 - percentile(sorted, 0.999))
         let gamma = min(0.90, max(0.76, 0.83 - min(0.05, max(0, (0.11 - sky) * 0.32))))

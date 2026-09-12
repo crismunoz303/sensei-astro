@@ -24,7 +24,7 @@ final class PhotoAnalysisTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plan.sampledTiles, 20)
         XCTAssertEqual(plan.planVersion, 2)
         XCTAssertTrue((0.48...1.12).contains(try XCTUnwrap(plan.displayGain)))
-        XCTAssertLessThanOrEqual(plan.blackPoint, max(0, plan.skyLevel - 2.4 * plan.skySigma) + 0.000_001)
+        XCTAssertLessThanOrEqual(plan.blackPoint, max(0, plan.skyLevel - max(2.4 * plan.skySigma, 2.0 / 255.0)) + 0.000_001)
         XCTAssertTrue(plan.operations.joined().contains("cubic background"))
     }
     func testBlackSkyDoesNotTriggerAutomaticExposure() throws {
