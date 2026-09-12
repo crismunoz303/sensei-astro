@@ -118,6 +118,7 @@ struct CapturePlan: Identifiable, Hashable, Codable {
 enum AstroTab: Hashable {
     case tonight
     case targets
+    case lab
 }
 
 struct AstroSnapshot: Codable {

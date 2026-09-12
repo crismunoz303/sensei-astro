@@ -12,6 +12,10 @@ struct RootView: View {
             NavigationStack { TargetsView() }
                 .tabItem { Label("Targets", systemImage: "scope") }
                 .tag(AstroTab.targets)
+
+            NavigationStack { PhotoLabView() }
+                .tabItem { Label("True Edit", systemImage: "slider.horizontal.3") }
+                .tag(AstroTab.lab)
         }
         .tint(AstroTheme.red)
         .overlay {

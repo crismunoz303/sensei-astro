@@ -49,6 +49,8 @@
   </array>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Sensei Astro uses your location to rank targets and calculate tonight's best capture windows.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>Sensei Astro saves finished copies while always preserving your original photograph.</string>
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>UILaunchScreen</key>
