@@ -129,9 +129,10 @@ struct AstroAutoPlan: Codable, Equatable {
     let sampledTiles: Int
 
     var operations: [String] {
-        [
+        let gainText = channelGains.map { String(format: "%.3f", $0) }.joined(separator: ", ")
+        return [
             "Sigma-clipped quadratic background model from \(sampledTiles) low-signal tiles",
-            "Per-channel sky neutralization; gains \(channelGains.map { String(format: \"%.3f\", $0) }.joined(separator: \", \"))",
+            "Per-channel sky neutralization; gains \(gainText)",
             String(format: "Measured black/white normalization: %.4f / %.4f", blackPoint, whitePoint),
             String(format: "Controlled nonlinear stretch: gamma %.3f", gamma),
             String(format: "Background-masked conventional noise reduction: %.4f", noiseLevel),
