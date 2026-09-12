@@ -50,7 +50,7 @@ struct TargetDetailView: View {
 
     private var detailGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
-            MetricView(title: "SESSION WINDOW", value: "\(plan.start.astroTime)-\(plan.end.astroTime)", detail: "Peak \(plan.bestTime.astroTime)")
+            MetricView(title: "SESSION WINDOW", value: "\(plan.start.astroTime)-\(plan.end.astroTime)", detail: "Best sample \(plan.bestTime.astroTime)")
             MetricView(title: "SKY POSITION", value: "\(Int(plan.altitude.rounded())) DEG \(plan.direction)", detail: "Azimuth \(Int(plan.azimuth.rounded())) DEG")
             MetricView(title: "MOUNT", value: "ALT-AZ", detail: "Standard tripod")
             MetricView(title: "LENS / FRAME", value: plan.target.lens, detail: plan.target.framing)
@@ -65,7 +65,7 @@ struct TargetDetailView: View {
     private var sequencePanel: some View {
         AstroPanel {
             VStack(alignment: .leading, spacing: 10) {
-                Text("EXACT SHOOTING SEQUENCE").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
+                Text("SHOOTING SEQUENCE").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
                 step(1, "Place the standard tripod on firm ground, level it, and provide at least 45 degrees of clear sky.")
                 step(2, "Power on the S30 Pro, connect in the Seestar app, and enter Stargazing mode.")
                 step(3, "Search for \(plan.target.id), tap GoTo, and let plate solving, centering, and autofocus finish.")
@@ -83,7 +83,7 @@ struct TargetDetailView: View {
                 HStack {
                     Text("USE THESE IN SEESTAR").font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
                     Spacer()
-                    Text("\(plan.confidenceText) CONFIDENCE")
+                    Text(plan.confidenceText)
                         .font(.caption2.bold().monospaced())
                         .foregroundStyle(AstroTheme.scoreColor(plan.score))
                 }
@@ -95,6 +95,8 @@ struct TargetDetailView: View {
                 instruction("STACK GOAL", "\(plan.integrationMinutes) accepted min")
                 instruction("RUN TIME", "\(plan.start.astroTime)-\(plan.end.astroTime) // \(plan.sessionMinutes) min")
                 Text(plan.filterReason).font(.caption).foregroundStyle(AstroTheme.muted)
+                Text("Ranking is a planning estimate from 15-minute samples and forecast data, not a measured probability. Moon positions are approximate. Check obstructions and the live sky; accepted-frame time varies.")
+                    .font(.caption).foregroundStyle(AstroTheme.muted)
 
                 if !plan.riskWarnings.isEmpty {
                     Divider().overlay(AstroTheme.red.opacity(0.35))

@@ -27,18 +27,17 @@ private extension SkyContext {
 enum WeatherClient {
     private struct Response: Decodable {
         let hourly: Hourly
-        let timezone: String
     }
 
     private struct Hourly: Decodable {
-        let time: [String]
-        let cloud_cover: [Double]
-        let precipitation_probability: [Double]
-        let relative_humidity_2m: [Double]
-        let dew_point_2m: [Double]
-        let temperature_2m: [Double]
-        let wind_speed_10m: [Double]
-        let wind_gusts_10m: [Double]
+        let time: [Double]
+        let cloud_cover: [Double?]?
+        let precipitation_probability: [Double?]?
+        let relative_humidity_2m: [Double?]?
+        let dew_point_2m: [Double?]?
+        let temperature_2m: [Double?]?
+        let wind_speed_10m: [Double?]?
+        let wind_gusts_10m: [Double?]?
     }
 
     static func load(coordinate: AstroCoordinate) async -> [WeatherPoint] {
@@ -50,37 +49,40 @@ enum WeatherClient {
             URLQueryItem(name: "temperature_unit", value: "fahrenheit"),
             URLQueryItem(name: "wind_speed_unit", value: "mph"),
             URLQueryItem(name: "timezone", value: "auto"),
+            URLQueryItem(name: "timeformat", value: "unixtime"),
             URLQueryItem(name: "forecast_days", value: "2")
         ]
         do {
-            let (data, response) = try await URLSession.shared.data(from: components.url!)
+            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: components.url!, timeoutInterval: 15))
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
-            let decoded = try JSONDecoder().decode(Response.self, from: data)
-            let hourly = decoded.hourly
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = TimeZone(identifier: decoded.timezone) ?? .current
-            formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
-            return hourly.time.indices.compactMap { index in
-                guard let date = formatter.date(from: hourly.time[index]) else { return nil }
-                return WeatherPoint(
-                    time: date,
-                    cloudPercent: value(hourly.cloud_cover, index),
-                    precipitationPercent: value(hourly.precipitation_probability, index),
-                    humidityPercent: value(hourly.relative_humidity_2m, index),
-                    dewPointF: value(hourly.dew_point_2m, index),
-                    temperatureF: value(hourly.temperature_2m, index),
-                    windMPH: value(hourly.wind_speed_10m, index),
-                    gustMPH: value(hourly.wind_gusts_10m, index)
-                )
-            }
+            return try decode(data)
         } catch {
             return []
         }
     }
 
-    private static func value(_ values: [Double], _ index: Int) -> Double {
-        values.indices.contains(index) ? values[index] : 0
+    static func decode(_ data: Data) throws -> [WeatherPoint] {
+            let decoded = try JSONDecoder().decode(Response.self, from: data)
+            let hourly = decoded.hourly
+            return hourly.time.indices.compactMap { index in
+                guard hourly.time[index].isFinite,
+                    let cloud = value(hourly.cloud_cover, index),
+                    let precipitation = value(hourly.precipitation_probability, index),
+                    let humidity = value(hourly.relative_humidity_2m, index),
+                    let dew = value(hourly.dew_point_2m, index),
+                    let temperature = value(hourly.temperature_2m, index),
+                    let wind = value(hourly.wind_speed_10m, index),
+                    let gust = value(hourly.wind_gusts_10m, index) else { return nil }
+                let point = WeatherPoint(time: Date(timeIntervalSince1970: hourly.time[index]), cloudPercent: cloud,
+                    precipitationPercent: precipitation, humidityPercent: humidity, dewPointF: dew,
+                    temperatureF: temperature, windMPH: wind, gustMPH: gust)
+                return point.isValid ? point : nil
+            }
+    }
+
+    private static func value(_ values: [Double?]?, _ index: Int) -> Double? {
+        guard let values, values.indices.contains(index), let value = values[index], value.isFinite else { return nil }
+        return value
     }
 }
 
@@ -147,7 +149,7 @@ enum SkyClient {
             URLQueryItem(name: "ID", value: "SenseiAstro")
         ]
         do {
-            let (data, response) = try await URLSession.shared.data(from: components.url!)
+            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: components.url!, timeoutInterval: 12))
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             return try JSONDecoder().decode(Response.self, from: data).properties.data
         } catch {

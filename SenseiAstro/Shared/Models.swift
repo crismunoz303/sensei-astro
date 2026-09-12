@@ -22,6 +22,12 @@ struct WeatherPoint: Hashable, Codable {
     let temperatureF: Double
     let windMPH: Double
     let gustMPH: Double
+
+    var isValid: Bool {
+        [cloudPercent, precipitationPercent, humidityPercent].allSatisfy { $0.isFinite && (0...100).contains($0) }
+            && [dewPointF, temperatureF, windMPH, gustMPH].allSatisfy { $0.isFinite }
+            && windMPH >= 0 && gustMPH >= 0
+    }
 }
 
 struct SkyContext: Codable {
@@ -69,24 +75,21 @@ struct CapturePlan: Identifiable, Hashable, Codable {
     }
 
     var confidenceText: String {
-        guard weather != nil else { return "PROVISIONAL" }
-        if score >= 80 { return "HIGH" }
-        if score >= 60 { return "MEDIUM" }
-        return "LOW"
+        weather == nil ? "PROVISIONAL" : "FORECAST AVAILABLE"
     }
 
     var filterReason: String {
         target.filterEnabled
-            ? "Suppresses city glow and strengthens emission signal."
+            ? "Passes selected emission lines while rejecting much of the background light; improves contrast at the cost of other wavelengths."
             : "Preserves broadband light and natural star/galaxy color."
     }
 
     var rankReason: String {
-        var reasons = ["peaks at \(Int(altitude.rounded()))° altitude"]
+        var reasons = ["\(Int(altitude.rounded()))° altitude at the highest-rated sample"]
         if moonSeparation >= 90 { reasons.append("well separated from the Moon") }
         else if moonSeparation < 45 { reasons.append("Moon interference is a risk") }
         if let weather {
-            reasons.append("\(Int(weather.cloudPercent.rounded()))% cloud near peak")
+            reasons.append("\(Int(weather.cloudPercent.rounded()))% forecast cloud there")
         }
         return reasons.joined(separator: ", ") + "."
     }
@@ -106,7 +109,7 @@ struct CapturePlan: Identifiable, Hashable, Codable {
         } else {
             values.append("Live weather is unavailable; verify the sky before setup.")
         }
-        if sessionMinutes < target.recommendedMinutes {
+        if integrationMinutes < target.recommendedMinutes {
             values.append("Tonight's window is shorter than the ideal integration for this target.")
         }
         return values

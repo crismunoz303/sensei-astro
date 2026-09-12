@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
-      - name: Run planner tests
+      - name: Run image and planner regression tests
         run: swift test
       - run: xcodegen generate
       - name: Compile for iPhone

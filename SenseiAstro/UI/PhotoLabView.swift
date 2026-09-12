@@ -1,338 +1,316 @@
-import CoreImage
-import CoreImage.CIFilterBuiltins
-import CryptoKit
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
 
-private struct EditRecipe: Equatable {
-    var exposure: Double = 0
-    var brightness: Double = 0
-    var contrast: Double = 1
-    var saturation: Double = 1
-    var vibrance: Double = 0
-    var noise: Double = 0
-    var sharpness: Double = 0
-
-    static let original = EditRecipe()
-}
-
 struct PhotoLabView: View {
+    @StateObject private var lab = PhotoLabStore()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pickerItem: PhotosPickerItem?
-    @State private var sourceData: Data?
-    @State private var originalImage: UIImage?
-    @State private var editedImage: UIImage?
-    @State private var recipe = EditRecipe.original
-    @State private var suggestedRecipe = EditRecipe.original
+    @State private var filePicker = false
     @State private var showOriginal = false
-    @State private var isProcessing = false
-    @State private var saveMessage: String?
+    @State private var showProjects = false
+    @State private var inspector = false
 
     var body: some View {
         ZStack {
-            AstroTheme.backgroundGradient.ignoresSafeArea()
+            AstroTheme.background.ignoresSafeArea()
             ScrollView {
-                VStack(spacing: 14) {
-                    labHeader
-                    if let originalImage {
-                        photoStage(originalImage)
-                        integrityPanel
-                        specialistPanel
-                        adjustmentPanel
-                        actionRow
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        eyebrow("SENSEI / PHOTO LAB")
+                        Text("Your light.\nYour photograph.").font(.largeTitle.bold())
+                        Text("Measured adjustments. Nothing imagined.").foregroundStyle(AstroTheme.muted)
+                    }
+                    if let operation = lab.operation { ProgressView(operation).tint(AstroTheme.red).font(.subheadline).accessibilityIdentifier("labOperation") }
+                    if let error = lab.error { notice(error, color: AstroTheme.amber) }
+                    if let message = lab.message { notice(message, color: AstroTheme.green) }
+                    if lab.original != nil {
+                        stage
+                        measurements
+                        advice
+                        adjustments
+                        exportPanel
+                        integrity
                     } else {
-                        emptyState
+                        AstroPanel {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Image(systemName: "camera.aperture").font(.system(size: 38)).foregroundStyle(AstroTheme.red)
+                                Text("Start with your original").font(.title2.bold())
+                                Text("Import a photo or a Seestar image export. Your source is saved unchanged; every edit is a separate recipe.")
+                                Text("JPEG, PNG, HEIC and single-image TIFF · up to 25 MP / 100 MB. FITS and RAW are not supported in this build.").font(.caption).foregroundStyle(AstroTheme.muted)
+                            }
+                        }
                     }
-                }
-                .padding()
+                    HStack {
+                        PhotosPicker(selection: $pickerItem, matching: .images, preferredItemEncoding: .current) {
+                            Label("Photos", systemImage: "photo.on.rectangle")
+                        }.buttonStyle(LabActionStyle(primary: true)).accessibilityIdentifier("importPhotos")
+                        Button { filePicker = true } label: { Label("Files", systemImage: "folder") }
+                            .buttonStyle(LabActionStyle()).accessibilityIdentifier("importFiles")
+                    }.disabled(lab.busy || lab.rendering)
+                    Text("Photo processing stays on this iPhone. No photo upload, image generation, or replacement imagery.")
+                        .font(.caption).foregroundStyle(AstroTheme.muted)
+                }.padding(18)
             }
         }
-        .navigationTitle("True Edit Lab")
+        .foregroundStyle(AstroTheme.text)
+        .navigationTitle("True Edit")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: pickerItem) { _, item in Task { await importPhoto(item) } }
-        .onChange(of: recipe) { _, _ in renderPreview() }
-    }
-
-    private var labHeader: some View {
-        HStack {
-            Label("SENSEI // TRUE EDIT ENGINE", systemImage: "wand.and.stars.inverse")
-                .font(.caption.bold().monospaced())
-                .foregroundStyle(AstroTheme.text)
-            Spacer()
-            Text("NON-GENERATIVE")
-                .font(.caption2.bold().monospaced())
-                .foregroundStyle(AstroTheme.green)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) {
+            Button { showProjects = true } label: { Label("Projects", systemImage: "square.stack") }
+                .disabled(lab.busy || lab.rendering).accessibilityIdentifier("savedProjects")
+        } }
+        .task { await lab.restore() }
+        .onChange(of: pickerItem) { _, item in if let item { Task { await lab.importPhoto(item) } } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { Task { await lab.flush() } } }
+        .fileImporter(isPresented: $filePicker, allowedContentTypes: [.jpeg, .png, .heic, .tiff]) { result in
+            switch result {
+            case .success(let url): Task { await lab.importFile(url) }
+            case .failure(let error): lab.error = error.localizedDescription
+            }
+        }
+        .sheet(isPresented: $showProjects) { projects }
+        .sheet(isPresented: $inspector) {
+            if let original = lab.original, let edited = lab.edited { LabInspector(original: original, edited: edited) }
         }
     }
 
-    private var emptyState: some View {
+    private var stage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .topLeading) {
+                Image(uiImage: (showOriginal ? lab.original : lab.edited) ?? UIImage())
+                    .resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: 440)
+                    .background(.black).clipShape(RoundedRectangle(cornerRadius: 16))
+                Text(showOriginal ? "ORIGINAL" : (lab.recipe.hasAdjustments ? "EDITED PREVIEW" : "NO ADJUSTMENTS"))
+                    .font(.caption2.monospaced().bold()).padding(8).background(.black.opacity(0.8), in: Capsule()).padding(10)
+            }
+            HStack {
+                Button { showOriginal.toggle() } label: {
+                    Label(showOriginal ? "Show edit" : "Show original", systemImage: "circle.lefthalf.filled")
+                }.accessibilityIdentifier("compareOriginal")
+                Spacer()
+                Button { inspector = true } label: { Label("Inspect", systemImage: "arrow.up.left.and.arrow.down.right") }
+            }.font(.subheadline.bold())
+            if lab.rendering { ProgressView("Updating preview…").tint(AstroTheme.red).font(.caption) }
+            Text("Preview: up to 1,400 px. Export uses your full source resolution.")
+                .font(.caption2).foregroundStyle(AstroTheme.muted)
+        }
+    }
+
+    private var measurements: some View {
         AstroPanel {
-            VStack(spacing: 16) {
-                Image(systemName: "photo.badge.plus")
-                    .font(.system(size: 48))
-                    .foregroundStyle(AstroTheme.red)
-                Text("IMPORT YOUR REAL PHOTO")
-                    .font(.title3.bold().monospaced())
-                    .foregroundStyle(AstroTheme.text)
-                Text("Your original remains untouched. True Edit only creates a reversible adjustment recipe and a separate finished copy.")
-                    .font(.subheadline)
-                    .foregroundStyle(AstroTheme.muted)
-                    .multilineTextAlignment(.center)
-                PhotosPicker(selection: $pickerItem, matching: .images) {
-                    Label("CHOOSE PHOTO", systemImage: "photo.on.rectangle")
-                        .font(.headline.bold().monospaced())
-                        .frame(maxWidth: .infinity)
-                        .padding(13)
-                        .foregroundStyle(.white)
-                        .background(AstroTheme.red, in: RoundedRectangle(cornerRadius: 13))
+            VStack(alignment: .leading, spacing: 10) {
+                eyebrow("SIGNAL CHECK")
+                if let before = lab.before, let after = lab.after {
+                    LabHistogram(before: before.histogram, after: after.histogram).frame(height: 74)
+                    HStack { Text("Gray: original"); Spacer(); Text("Red: preview") }.font(.caption2).foregroundStyle(AstroTheme.muted)
+                    measurementRow("Median brightness", before.median, after.median)
+                    measurementRow("Near-clipped channels", before.clippedHighlights, after.clippedHighlights)
+                    measurementRow("Near-black pixels", before.crushedBlacks, after.crushedBlacks)
+                    if after.clippedHighlights > before.clippedHighlights + 0.001 {
+                        notice("The edit increases highlight clipping. Reduce exposure or contrast and inspect bright stars.", color: AstroTheme.amber)
+                    }
+                    if after.crushedBlacks > before.crushedBlacks + 0.005 {
+                        notice("The edit increases black clipping. Faint detail may be lost.", color: AstroTheme.amber)
+                    }
+                    Text("Sampled sRGB preview, not a scientific SNR measurement. Downsampling can hide tiny stars and clipped pixels; inspect the full export.")
+                        .font(.caption2).foregroundStyle(AstroTheme.muted)
                 }
             }
         }
     }
 
-    private func photoStage(_ original: UIImage) -> some View {
-        ZStack(alignment: .topTrailing) {
-            Image(uiImage: showOriginal ? original : (editedImage ?? original))
-                .resizable()
-                .scaledToFit()
-                .frame(maxHeight: 390)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(AstroTheme.red.opacity(0.35)))
-            Text(showOriginal ? "ORIGINAL" : "EDITED COPY")
-                .font(.caption2.bold().monospaced())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .foregroundStyle(AstroTheme.text)
-                .background(.black.opacity(0.72), in: Capsule())
-                .padding(9)
-        }
-        .onLongPressGesture(minimumDuration: 0.05, pressing: { showOriginal = $0 }, perform: {})
-        .accessibilityLabel(showOriginal ? "Original photograph" : "Edited preview")
-        .accessibilityHint("Press and hold to compare with the original")
+    private var advice: some View {
+        AstroPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                eyebrow("GUIDED START")
+                Picker("Photo type", selection: $lab.intent) {
+                    ForEach(PhotoIntent.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented)
+                if let advice = lab.advice {
+                    ForEach(advice.reasons, id: \.self) { Text($0).font(.subheadline) }
+                    ForEach(advice.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(AstroTheme.amber) }
+                    Button("Apply suggested starting point") { lab.applyAdvice() }.buttonStyle(LabActionStyle(primary: true))
+                }
+                Text("Recommendations use measured pixels and conservative rules. They are not a trained AI specialist or a guarantee of the best edit.")
+                    .font(.caption2).foregroundStyle(AstroTheme.muted)
+            }
+        }.disabled(lab.busy)
     }
 
-    private var integrityPanel: some View {
+    private var adjustments: some View {
         AstroPanel {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Label("ORIGINAL LOCKED", systemImage: "lock.fill")
-                        .font(.caption.bold().monospaced())
-                        .foregroundStyle(AstroTheme.green)
+                    eyebrow("YOUR RECIPE")
                     Spacer()
-                    if let originalImage {
-                        Text("\(Int(originalImage.size.width)) × \(Int(originalImage.size.height))")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(AstroTheme.muted)
+                    Button { lab.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(lab.undoStack.isEmpty).accessibilityLabel("Undo")
+                    Button { lab.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(lab.redoStack.isEmpty).accessibilityLabel("Redo")
+                }
+                adjustment("Exposure · EV", $lab.recipe.exposure, -1...1)
+                adjustment("Midtone lift", $lab.recipe.midtones, 0...0.16)
+                adjustment("Contrast", $lab.recipe.contrast, 0.9...1.15)
+                adjustment("Saturation", $lab.recipe.saturation, 0...1.3)
+                adjustment("Red / blue balance", $lab.recipe.warmth, -0.1...0.1)
+                Toggle("Protect bright source pixels", isOn: Binding(get: { lab.recipe.protectHighlights }, set: {
+                    lab.rememberAdjustment(); lab.recipe.protectHighlights = $0
+                })).font(.subheadline)
+                Text("Blends original highlights back into the edit. This is a brightness mask, not star detection or color calibration.").font(.caption2).foregroundStyle(AstroTheme.muted)
+                DisclosureGroup("Detail controls") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Inspect carefully: conventional denoise can remove real faint signal; sharpening can create halos. Both start off.").font(.caption).foregroundStyle(AstroTheme.amber)
+                        adjustment("Denoise", $lab.recipe.denoise, 0...0.04)
+                        adjustment("Sharpen", $lab.recipe.sharpen, 0...0.4)
+                    }.padding(.top, 10)
+                }
+                Button("Reset all adjustments") { lab.reset() }.font(.subheadline)
+            }
+        }.disabled(lab.busy)
+    }
+
+    private var exportPanel: some View {
+        AstroPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                eyebrow("FINISH & EXPORT")
+                Picker("Export format", selection: $lab.format) {
+                    ForEach(LabExportFormat.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).disabled(lab.busy)
+                Text(lab.format == .png ? "Lossless 8-bit sRGB copy for sharing." : "16-bit sRGB TIFF for further editing. A larger bit depth cannot recover detail missing from a JPEG.")
+                    .font(.caption).foregroundStyle(AstroTheme.muted)
+                Button { Task { await lab.prepareExport(saveToPhotos: true) } } label: { Label("Save edited copy to Photos", systemImage: "square.and.arrow.down") }
+                    .buttonStyle(LabActionStyle(primary: true)).disabled(lab.busy || !lab.previewCurrent)
+                Button { Task { await lab.prepareExport(saveToPhotos: false) } } label: { Label("Prepare image + edit report", systemImage: "doc.text") }
+                    .buttonStyle(LabActionStyle()).disabled(lab.busy || !lab.previewCurrent)
+                if let result = lab.exportResult {
+                    Text("Verified \(result.width) × \(result.height) · sRGB").font(.caption.bold()).foregroundStyle(AstroTheme.green)
+                    ShareLink(items: [result.imageURL, result.reportURL]) { Label("Share / Save to Files", systemImage: "square.and.arrow.up") }
+                    Text("The report records every operation and full source/output checksums. Location metadata is omitted from edited exports.")
+                        .font(.caption2).foregroundStyle(AstroTheme.muted)
+                }
+            }
+        }
+    }
+
+    private var integrity: some View {
+        DisclosureGroup("Original & edit record") {
+            VStack(alignment: .leading, spacing: 10) {
+                if let p = lab.project {
+                    Text("\(p.width) × \(p.height) · \(p.sourceDepth)-bit source · \(p.sourceExtension.uppercased())").font(.caption.bold())
+                    Text("SHA-256\n\(p.sha256)").font(.caption2.monospaced()).textSelection(.enabled)
+                    ForEach(lab.recipe.bounded.operations, id: \.self) { Text($0).font(.caption) }
+                    Text("Your imported bytes and recipe are saved on this phone. Deleting the app deletes local projects; keep a separate backup. Photos may supply a previously edited version—use Files when you need an exact master.")
+                        .font(.caption).foregroundStyle(AstroTheme.muted)
+                    Button("Prepare unchanged original backup") { Task { await lab.prepareOriginal() } }.disabled(lab.busy)
+                    if let url = lab.originalExport { ShareLink(item: url) { Label("Save original backup", systemImage: "square.and.arrow.up") } }
+                }
+            }.padding(.top, 12)
+        }
+    }
+
+    private var projects: some View {
+        NavigationStack {
+            List(lab.projects) { p in
+                Button {
+                    showProjects = false; Task { await lab.open(p) }
+                } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(p.created.formatted(date: .abbreviated, time: .shortened)).font(.headline)
+                        Text("\(p.width) × \(p.height) · \(p.sourceExtension.uppercased()) · \(p.sha256.prefix(8))").font(.caption.monospaced())
+                        Text(p.recipe.hasAdjustments ? "Saved edit recipe" : "Original preserved").font(.caption).foregroundStyle(AstroTheme.muted)
                     }
                 }
-                Text("SOURCE ID // \(sourceID)")
-                    .font(.caption2.bold().monospaced())
-                    .foregroundStyle(AstroTheme.muted)
-                Text("No generative fill • No invented objects • No source overwrite")
-                    .font(.caption)
-                    .foregroundStyle(AstroTheme.text)
             }
+            .overlay { if lab.projects.isEmpty { ContentUnavailableView("No saved projects", systemImage: "photo", description: Text("Import a photo to begin.")) } }
+            .navigationTitle("Your projects")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showProjects = false } } }
+        }.tint(AstroTheme.red).preferredColorScheme(.dark)
+    }
+
+    private func adjustment(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>) -> some View {
+        VStack(spacing: 3) {
+            HStack { Text(title); Spacer(); Text(value.wrappedValue, format: .number.precision(.fractionLength(3))).monospacedDigit() }.font(.caption)
+            Slider(value: value, in: range, onEditingChanged: { if $0 { lab.rememberAdjustment() } }).accessibilityLabel(title)
         }
     }
-
-    private var specialistPanel: some View {
-        AstroPanel {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("SPECIALIST RECOMMENDATION")
-                        .font(.caption.bold().monospaced())
-                        .foregroundStyle(AstroTheme.red)
-                    Spacer()
-                    if isProcessing { ProgressView().tint(AstroTheme.red) }
-                }
-                Text(recommendationSummary)
-                    .font(.subheadline)
-                    .foregroundStyle(AstroTheme.text)
-                Button {
-                    recipe = suggestedRecipe
-                } label: {
-                    Label("APPLY RECOMMENDATION", systemImage: "checkmark.shield.fill")
-                        .font(.caption.bold().monospaced())
-                        .frame(maxWidth: .infinity)
-                        .padding(10)
-                        .background(AstroTheme.red.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
-                }
-                .foregroundStyle(AstroTheme.red)
-            }
-        }
+    private func measurementRow(_ title: String, _ a: Double, _ b: Double) -> some View {
+        HStack { Text(title); Spacer(); Text(String(format: "%.2f%% → %.2f%%", a*100, b*100)).monospacedDigit() }.font(.caption)
     }
-
-    private var adjustmentPanel: some View {
-        AstroPanel {
-            VStack(spacing: 12) {
-                Text("REVERSIBLE ADJUSTMENTS")
-                    .font(.caption.bold().monospaced())
-                    .foregroundStyle(AstroTheme.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                editSlider("EXPOSURE", value: $recipe.exposure, range: -1...1, baseline: 0)
-                editSlider("BRIGHTNESS", value: $recipe.brightness, range: -0.2...0.2, baseline: 0)
-                editSlider("CONTRAST", value: $recipe.contrast, range: 0.75...1.35, baseline: 1)
-                editSlider("SATURATION", value: $recipe.saturation, range: 0.6...1.4, baseline: 1)
-                editSlider("VIBRANCE", value: $recipe.vibrance, range: -0.5...0.8, baseline: 0)
-                editSlider("DENOISE", value: $recipe.noise, range: 0...0.08, baseline: 0)
-                editSlider("SHARPNESS", value: $recipe.sharpness, range: 0...0.7, baseline: 0)
-            }
-        }
-    }
-
-    private func editSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, baseline: Double) -> some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text(title).font(.caption2.bold().monospaced()).foregroundStyle(AstroTheme.muted)
-                Spacer()
-                Text(String(format: "%+.2f", value.wrappedValue - baseline))
-                    .font(.caption2.bold().monospaced())
-                    .foregroundStyle(AstroTheme.text)
-            }
-            Slider(value: value, in: range).tint(AstroTheme.red)
-        }
-    }
-
-    private var actionRow: some View {
-        VStack(spacing: 9) {
-            HStack(spacing: 9) {
-                Button("RESET") { recipe = .original }
-                    .buttonStyle(LabButtonStyle(color: AstroTheme.panel))
-                PhotosPicker(selection: $pickerItem, matching: .images) {
-                    Text("NEW PHOTO")
-                }
-                .buttonStyle(LabButtonStyle(color: AstroTheme.panel))
-            }
-            Button {
-                guard let image = editedImage ?? originalImage else { return }
-                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                saveMessage = "Finished copy saved. Original was not changed."
-            } label: {
-                Label("SAVE FINISHED COPY", systemImage: "square.and.arrow.down.fill")
-            }
-            .buttonStyle(LabButtonStyle(color: AstroTheme.red))
-            if let saveMessage {
-                Text(saveMessage).font(.caption).foregroundStyle(AstroTheme.green)
-            }
-        }
-        .font(.caption.bold().monospaced())
-    }
-
-    private var sourceID: String {
-        guard let sourceData else { return "NONE" }
-        return SHA256.hash(data: sourceData).prefix(5).map { String(format: "%02x", $0) }.joined().uppercased()
-    }
-
-    private var recommendationSummary: String {
-        guard originalImage != nil else { return "Import a photo to begin." }
-        let exposure = suggestedRecipe.exposure >= 0 ? "lift" : "reduce"
-        return "Measured from this photograph: \(exposure) exposure, protect color, apply restrained noise reduction, and avoid aggressive sharpening. Hold the preview to audit against the untouched source."
-    }
-
-    @MainActor
-    private func importPhoto(_ item: PhotosPickerItem?) async {
-        guard let data = try? await item?.loadTransferable(type: Data.self),
-              let image = UIImage(data: data) else { return }
-        sourceData = data
-        originalImage = image
-        isProcessing = true
-        saveMessage = nil
-        let suggestion = PhotoFinishingEngine.suggest(for: image)
-        suggestedRecipe = suggestion
-        recipe = suggestion
-        isProcessing = false
-    }
-
-    private func renderPreview() {
-        guard let originalImage else { return }
-        isProcessing = true
-        editedImage = PhotoFinishingEngine.render(originalImage, recipe: recipe)
-        isProcessing = false
+    private func eyebrow(_ value: String) -> some View { Text(value).font(.caption.monospaced().bold()).foregroundStyle(AstroTheme.red) }
+    private func notice(_ value: String, color: Color) -> some View {
+        Text(value).font(.subheadline).foregroundStyle(color).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
-private struct LabButtonStyle: ButtonStyle {
-    let color: Color
+private struct LabActionStyle: ButtonStyle {
+    var primary = false
+    @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: .infinity)
-            .padding(12)
-            .foregroundStyle(AstroTheme.text)
-            .background(color.opacity(configuration.isPressed ? 0.65 : 1), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(AstroTheme.red.opacity(0.35)))
+        configuration.label.font(.subheadline.bold()).frame(maxWidth: .infinity).padding(.vertical, 13).padding(.horizontal, 8)
+            .background(primary ? AstroTheme.crimson : AstroTheme.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(AstroTheme.text).opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
     }
 }
 
-private enum PhotoFinishingEngine {
-    private static let context = CIContext(options: [.cacheIntermediates: true])
-
-    static func suggest(for image: UIImage) -> EditRecipe {
-        guard let input = CIImage(image: image), let average = averageRGBA(input) else {
-            return EditRecipe(exposure: 0.08, contrast: 1.06, saturation: 1.02, vibrance: 0.08, noise: 0.025, sharpness: 0.15)
-        }
-        let luminance = 0.2126 * average.r + 0.7152 * average.g + 0.0722 * average.b
-        let target = luminance < 0.16 ? 0.19 : min(0.48, luminance)
-        let exposure = min(0.65, max(-0.35, log2(max(0.01, target) / max(0.01, luminance))))
-        let colorSpread = max(average.r, average.g, average.b) - min(average.r, average.g, average.b)
-        return EditRecipe(
-            exposure: exposure,
-            brightness: 0,
-            contrast: luminance < 0.25 ? 1.08 : 1.03,
-            saturation: colorSpread < 0.08 ? 1.07 : 1.02,
-            vibrance: colorSpread < 0.08 ? 0.14 : 0.06,
-            noise: luminance < 0.25 ? 0.035 : 0.018,
-            sharpness: luminance < 0.25 ? 0.12 : 0.18
-        )
+private struct LabHistogram: View {
+    let before: [Int]
+    let after: [Int]
+    var body: some View {
+        Canvas { context, size in
+            let maximum = log1p(Double(max(before.max() ?? 0, after.max() ?? 0)))
+            guard maximum > 0 else { return }
+            for (values, color) in [(before, Color.gray.opacity(0.55)), (after, AstroTheme.red.opacity(0.7))] {
+                var path = Path(); path.move(to: CGPoint(x: 0, y: size.height))
+                for (i, count) in values.enumerated() {
+                    path.addLine(to: CGPoint(x: Double(i) / 255 * size.width, y: size.height * (1-log1p(Double(count))/maximum)))
+                }
+                path.addLine(to: CGPoint(x: size.width, y: size.height)); path.closeSubpath()
+                context.fill(path, with: .color(color))
+            }
+        }.accessibilityLabel("Logarithmic brightness histogram. Numerical comparison below.")
     }
+}
 
-    static func render(_ image: UIImage, recipe: EditRecipe) -> UIImage? {
-        guard let original = CIImage(image: image) else { return image }
-        var output = original
-
-        let exposure = CIFilter.exposureAdjust()
-        exposure.inputImage = output
-        exposure.ev = Float(recipe.exposure)
-        output = exposure.outputImage ?? output
-
-        let color = CIFilter.colorControls()
-        color.inputImage = output
-        color.brightness = Float(recipe.brightness)
-        color.contrast = Float(recipe.contrast)
-        color.saturation = Float(recipe.saturation)
-        output = color.outputImage ?? output
-
-        let vibrance = CIFilter.vibrance()
-        vibrance.inputImage = output
-        vibrance.amount = Float(recipe.vibrance)
-        output = vibrance.outputImage ?? output
-
-        if recipe.noise > 0 {
-            let denoise = CIFilter.noiseReduction()
-            denoise.inputImage = output
-            denoise.noiseLevel = Float(recipe.noise)
-            denoise.sharpness = 0.25
-            output = denoise.outputImage ?? output
-        }
-
-        if recipe.sharpness > 0 {
-            let sharpen = CIFilter.sharpenLuminance()
-            sharpen.inputImage = output
-            sharpen.sharpness = Float(recipe.sharpness)
-            output = sharpen.outputImage ?? output
-        }
-
-        output = output.cropped(to: original.extent)
-        guard let cgImage = context.createCGImage(output, from: original.extent) else { return image }
-        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+private struct LabInspector: View {
+    let original: UIImage
+    let edited: UIImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var showOriginal = false
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 8) {
+                LabZoomView(image: showOriginal ? original : edited)
+                Toggle("Show original", isOn: $showOriginal).padding(.horizontal)
+                Text("Pinch and pan the preview. Check the full export for pixel-level decisions.")
+                    .font(.caption).foregroundStyle(AstroTheme.muted).padding()
+            }.background(.black).navigationTitle(showOriginal ? "Original" : "Edited preview")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+        }.preferredColorScheme(.dark).tint(AstroTheme.red)
     }
+}
 
-    private static func averageRGBA(_ image: CIImage) -> (r: Double, g: Double, b: Double, a: Double)? {
-        let average = CIFilter.areaAverage()
-        average.inputImage = image
-        average.extent = image.extent
-        guard let output = average.outputImage else { return nil }
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        context.render(output, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
-        return (Double(bitmap[0]) / 255, Double(bitmap[1]) / 255, Double(bitmap[2]) / 255, Double(bitmap[3]) / 255)
+private struct LabZoomView: UIViewRepresentable {
+    let image: UIImage
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UIScrollView {
+        let view = UIScrollView(); view.delegate = context.coordinator
+        view.minimumZoomScale = 1; view.maximumZoomScale = 6; view.backgroundColor = .black
+        context.coordinator.imageView.contentMode = .scaleAspectFit
+        context.coordinator.imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(context.coordinator.imageView)
+        return view
+    }
+    func updateUIView(_ view: UIScrollView, context: Context) {
+        context.coordinator.imageView.image = image
+        if view.zoomScale == 1 {
+            context.coordinator.imageView.frame = view.bounds
+            view.contentSize = view.bounds.size
+        }
+    }
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        let imageView = UIImageView()
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
     }
 }

@@ -22,6 +22,29 @@ final class PlannerEngineTests: XCTestCase {
         XCTAssertTrue(plans.isEmpty)
     }
 
+    func testSessionNeverExtendsBeyondAstronomicalDawn() throws {
+        let start = date("2026-09-12T03:00:00Z")
+        let end = start.addingTimeInterval(47 * 60)
+        let plan = try XCTUnwrap(PlannerEngine.rank([circumpolarTarget], coordinate: coordinate, sky: sky(start: start, end: end), now: start).first)
+        XCTAssertGreaterThanOrEqual(plan.start, start)
+        XCTAssertLessThanOrEqual(plan.end, end)
+        XCTAssertLessThanOrEqual(plan.visibleMinutes, 47)
+    }
+
+    func testUnderFifteenMinutesRemainingDoesNotInventSession() {
+        let start = date("2026-09-12T03:00:00Z")
+        XCTAssertTrue(PlannerEngine.rank([circumpolarTarget], coordinate: coordinate,
+            sky: sky(start: start, end: start.addingTimeInterval(14*60)), now: start).isEmpty)
+    }
+
+    func testStaleForecastIsNotUsedAsLiveWeather() throws {
+        let start = date("2026-09-12T03:00:00Z")
+        let stale = WeatherPoint(time: start.addingTimeInterval(-86400), cloudPercent: 0, precipitationPercent: 0, humidityPercent: 50, dewPointF: 40, temperatureF: 60, windMPH: 0, gustMPH: 0)
+        let plan = try XCTUnwrap(PlannerEngine.rank([circumpolarTarget], coordinate: coordinate,
+            sky: sky(start: start, end: start.addingTimeInterval(3600), weather: [stale]), now: start).first)
+        XCTAssertNil(plan.weather); XCTAssertLessThanOrEqual(plan.score, 69)
+    }
+
     func testOfflineRankIsCappedBelowExcellent() throws {
         let start = date("2026-09-12T03:00:00Z")
         let end = start.addingTimeInterval(6 * 3600)

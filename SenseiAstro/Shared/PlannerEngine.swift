@@ -15,10 +15,11 @@ enum PlannerEngine {
         let planningStart = max(now, sky.start)
         var samples: [Date] = []
         var cursor = planningStart
-        while cursor <= sky.end {
+        while cursor < sky.end {
             samples.append(cursor)
             cursor = cursor.addingTimeInterval(15 * 60)
         }
+        samples.append(sky.end)
 
         let unranked: [(AstroTarget, Sample, Int, Date, Date, Int, Int)] = targets.compactMap { target in
             let evaluated = samples.map { evaluate(target, at: $0, coordinate: coordinate, sky: sky) }
@@ -28,15 +29,20 @@ enum PlannerEngine {
             let segments = continuousSegments(evaluated, usable: usable)
             guard let window = segments.max(by: { segmentValue($0) < segmentValue($1) }),
                   let first = window.first, let last = window.last,
-                  let best = window.max(by: { $0.score < $1.score }) else { return nil }
-            let possibleMinutes = max(15, Int(last.time.timeIntervalSince(first.time) / 60) + 15)
+                  let best = window.dropLast().max(by: { $0.score < $1.score }) else { return nil }
+            // Both endpoints must be usable. Never extend a sample beyond darkness.
+            let possibleMinutes = Int(last.time.timeIntervalSince(first.time) / 60)
+            guard possibleMinutes >= 15 else { return nil }
             let integrationCapacity = max(10, Int(Double(possibleMinutes) * 0.8) / 5 * 5)
             let integration = max(10, min(target.recommendedMinutes, integrationCapacity))
             let session = min(possibleMinutes, max(integration, Int(ceil(Double(integration) * 1.25 / 5)) * 5))
-            let start = captureStart(peak: best.time, minutes: session, nightStart: first.time, nightEnd: last.time.addingTimeInterval(15 * 60))
+            let start = captureStart(peak: best.time, minutes: session, nightStart: first.time, nightEnd: last.time)
             let end = start.addingTimeInterval(Double(session * 60))
-            let final = finalScore(target: target, best: best, possibleMinutes: possibleMinutes, moonIllumination: sky.moonIllumination)
-            return (target, best, final, start, end, integration, possibleMinutes)
+            let forecastComplete = window.allSatisfy { $0.weather != nil }
+            let qualified = Sample(time: best.time, altitude: best.altitude, azimuth: best.azimuth,
+                moonSeparation: best.moonSeparation, weather: forecastComplete ? best.weather : nil, score: best.score)
+            let final = finalScore(target: target, best: qualified, possibleMinutes: possibleMinutes, moonIllumination: sky.moonIllumination)
+            return (target, qualified, final, start, end, integration, possibleMinutes)
         }
 
         return unranked.sorted { $0.2 > $1.2 }.enumerated().map { index, item in
@@ -122,7 +128,9 @@ enum PlannerEngine {
     }
 
     private static func nearestWeather(_ values: [WeatherPoint], to date: Date) -> WeatherPoint? {
-        values.min { abs($0.time.timeIntervalSince(date)) < abs($1.time.timeIntervalSince(date)) }
+        guard let point = values.filter({ $0.isValid }).min(by: { abs($0.time.timeIntervalSince(date)) < abs($1.time.timeIntervalSince(date)) }),
+              abs(point.time.timeIntervalSince(date)) <= 3600 else { return nil }
+        return point
     }
 
     private static func horizontalPosition(raHours: Double, decDegrees: Double, at date: Date, coordinate: AstroCoordinate) -> (altitude: Double, azimuth: Double) {

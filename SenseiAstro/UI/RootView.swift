@@ -5,11 +5,17 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $store.selectedTab) {
-            NavigationStack { TonightView() }
+            NavigationStack {
+                if store.hasLoaded { TonightView() }
+                else { ProgressView("Calculating your sky…") }
+            }
                 .tabItem { Label("Tonight", systemImage: "moon.stars.fill") }
                 .tag(AstroTab.tonight)
 
-            NavigationStack { TargetsView() }
+            NavigationStack {
+                if store.hasLoaded { TargetsView() }
+                else { ProgressView("Calculating target windows…") }
+            }
                 .tabItem { Label("Targets", systemImage: "scope") }
                 .tag(AstroTab.targets)
 
@@ -18,15 +24,6 @@ struct RootView: View {
                 .tag(AstroTab.lab)
         }
         .tint(AstroTheme.red)
-        .overlay {
-            if !store.hasLoaded {
-                ZStack {
-                    AstroTheme.background.ignoresSafeArea()
-                    ProgressView("Calculating your sky…")
-                        .tint(AstroTheme.red)
-                }
-            }
-        }
         .task {
             store.start()
             while !Task.isCancelled {
