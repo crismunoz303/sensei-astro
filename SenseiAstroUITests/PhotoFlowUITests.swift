@@ -27,8 +27,13 @@ final class PhotoFlowUITests: XCTestCase {
         attach(app, "03-verified-export")
         app.terminate(); app.launch()
         XCTAssertTrue(compare.waitForExistence(timeout: 30))
-        app.buttons["savedProjects"].tap()
-        XCTAssertTrue(app.navigationBars["Your projects"].waitForExistence(timeout: 10))
+        let savedProjects = app.buttons["savedProjects"]
+        XCTAssertTrue(savedProjects.waitForExistence(timeout: 30))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true AND isHittable == true"),
+            object: savedProjects)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed)
+        savedProjects.tap()
+        XCTAssertTrue(app.navigationBars["Your projects"].waitForExistence(timeout: 20))
         XCTAssertGreaterThan(app.cells.count, 0)
         attach(app, "04-project-recovery")
     }
