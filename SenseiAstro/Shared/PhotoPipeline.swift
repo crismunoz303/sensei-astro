@@ -33,6 +33,8 @@ struct PhotoProject: Codable, Identifiable {
     var recipe: PhotoRecipe
     var intent: PhotoIntent
     var updated: Date
+    var astroPlan: AstroAutoPlan?
+    var automaticProcessingDisabled: Bool?
 }
 
 struct LabLoadedPhoto {
@@ -65,11 +67,12 @@ struct LabExport: Identifiable {
 /// Serialized, off-main image work. No networking; only source-derived mathematical filters.
 actor PhotoPipeline {
     private let root: URL
-    private let context = CIContext(options: [.cacheIntermediates: false, .workingFormat: CIFormat.RGBAh])
+    private let context = CIContext(options: [.cacheIntermediates: false, .workingFormat: CIFormat.RGBAh,
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private var cachedPreview: (UUID, CGImage)?
     private let manager = FileManager.default
-    static let engineVersion = "true-edit-1.3.0"
+    static let engineVersion = "astro-develop-1.4.0"
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -107,14 +110,15 @@ actor PhotoPipeline {
         let swapped = (5...8).contains(orientation)
         let digest = Self.hash(data)
         if let existing = try projects().first(where: { $0.sha256 == digest }) { return try open(existing) }
+        // Decode and analyze before committing a project; invalid files never create one.
+        let preview = try thumbnail(source, maxPixel: 1400)
+        let analysis = try analyze(preview)
         let project = PhotoProject(id: UUID(), created: Date(), sha256: digest,
             sourceExtension: type.preferredFilenameExtension ?? "image", sourceBytes: data.count,
             width: swapped ? height : width, height: swapped ? width : height,
             sourceDepth: props[kCGImagePropertyDepth] as? Int ?? 8,
-            recipe: .identity, intent: .astro, updated: Date())
-        // Decode before committing a project; invalid files never create a usable project.
-        let preview = try thumbnail(source, maxPixel: 1400)
-        let measurement = try measure(preview)
+            recipe: .identity, intent: .astro, updated: Date(), astroPlan: analysis.plan,
+            automaticProcessingDisabled: false)
         try manager.createDirectory(at: directory(project), withIntermediateDirectories: true)
         try data.write(to: sourceURL(project), options: .atomic)
         guard Self.hash(try Data(contentsOf: sourceURL(project))) == digest else {
@@ -122,15 +126,23 @@ actor PhotoPipeline {
         }
         try save(project)
         cachedPreview = (project.id, preview)
-        return LabLoadedPhoto(project: project, preview: preview, measurement: measurement)
+        return LabLoadedPhoto(project: project, preview: preview, measurement: analysis.measurement)
     }
 
     func open(_ project: PhotoProject) throws -> LabLoadedPhoto {
         try verify(project)
         guard let source = CGImageSourceCreateWithURL(sourceURL(project) as CFURL, nil) else { throw LabError.invalid("The saved source cannot be decoded.") }
         let preview = try thumbnail(source, maxPixel: 1400)
-        cachedPreview = (project.id, preview)
-        return LabLoadedPhoto(project: project, preview: preview, measurement: try measure(preview))
+        let analysis = try analyze(preview)
+        var upgraded = project
+        if upgraded.astroPlan == nil {
+            upgraded.astroPlan = analysis.plan
+            upgraded.automaticProcessingDisabled = false
+            upgraded.updated = Date()
+            try save(upgraded)
+        }
+        cachedPreview = (upgraded.id, preview)
+        return LabLoadedPhoto(project: upgraded, preview: preview, measurement: analysis.measurement)
     }
 
     func save(_ project: PhotoProject) throws {
@@ -146,7 +158,8 @@ actor PhotoPipeline {
         let preview: CGImage
         if let cachedPreview, cachedPreview.0 == project.id { preview = cachedPreview.1 }
         else { preview = try open(project).preview }
-        let result = try renderImage(CIImage(cgImage: preview), recipe: project.recipe)
+        let result = try renderImage(CIImage(cgImage: preview), recipe: project.recipe,
+            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan)
         try Task.checkCancellation()
         return LabRenderedPhoto(image: result, measurement: try measure(result))
     }
@@ -169,7 +182,8 @@ actor PhotoPipeline {
         let cell = min(8, max(0, region))
         let rect = CGRect(x: area.minX + (area.width-w)*CGFloat(cell%3)/2,
             y: area.minY + (area.height-h)*CGFloat(2-cell/3)/2, width: w, height: h).integral
-        let output = try process(input, recipe: project.recipe.bounded)
+        let output = try process(input, recipe: project.recipe.bounded,
+            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan)
         guard let original = context.createCGImage(input, from: rect, format: .RGBA8, colorSpace: colorSpace),
               let edited = context.createCGImage(output, from: rect, format: .RGBA8, colorSpace: colorSpace) else {
             throw LabError.invalid("Detail rendering failed. Your original remains saved.")
@@ -184,7 +198,8 @@ actor PhotoPipeline {
         guard let input = CIImage(contentsOf: sourceURL(project), options: [.applyOrientationProperty: true]) else {
             throw LabError.invalid("The original could not be decoded for export.")
         }
-        let output = try process(input, recipe: project.recipe.bounded).settingProperties([:])
+        let activePlan = project.automaticProcessingDisabled == true ? nil : project.astroPlan
+        let output = try process(input, recipe: project.recipe.bounded, autoPlan: activePlan).settingProperties([:])
         let bytes: Data?
         switch format {
         case .png: bytes = context.pngRepresentation(of: output, format: .RGBA8, colorSpace: colorSpace)
@@ -221,22 +236,23 @@ actor PhotoPipeline {
                 "16-bit output does not recover precision or detail absent from the input."]
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(Audit(project: project, format: format, outputSHA256: Self.hash(bytes), operations: project.recipe.bounded.operations))
+        let operations = (activePlan?.operations ?? ["Automatic astrophotography processing disabled"]) + project.recipe.bounded.operations
+        try encoder.encode(Audit(project: project, format: format, outputSHA256: Self.hash(bytes), operations: operations))
             .write(to: reportURL, options: .atomic)
         return LabExport(imageURL: imageURL, reportURL: reportURL, originalSHA256: project.sha256, width: project.width, height: project.height)
     }
 
     // Internal so deterministic macOS regression tests exercise the actual iPhone processing code.
-    func renderImage(_ source: CIImage, recipe: PhotoRecipe) throws -> CGImage {
-        let output = try process(source, recipe: recipe.bounded)
+    func renderImage(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan? = nil) throws -> CGImage {
+        let output = try process(source, recipe: recipe.bounded, autoPlan: autoPlan)
         guard let image = context.createCGImage(output, from: source.extent, format: .RGBA8, colorSpace: colorSpace) else {
             throw LabError.invalid("Rendering failed. The original is safe.")
         }
         return image
     }
 
-    private func process(_ source: CIImage, recipe: PhotoRecipe) throws -> CIImage {
-        guard recipe.hasAdjustments else { return source }
+    private func process(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan?) throws -> CIImage {
+        guard recipe.hasAdjustments || autoPlan != nil else { return source }
         var result = source
         func filter(_ name: String, _ params: [String: Any]) throws {
             var values = params; values[kCIInputImageKey] = result
@@ -244,6 +260,9 @@ actor PhotoPipeline {
                 throw LabError.invalid("Required photo operation \(name) is unavailable. Export stopped.")
             }
             result = output
+        }
+        if let plan = autoPlan {
+            result = try automaticDevelop(result, plan: plan)
         }
         if recipe.exposure != 0 { try filter("CIExposureAdjust", [kCIInputEVKey: recipe.exposure]) }
         if recipe.warmth != 0 {
@@ -284,19 +303,130 @@ actor PhotoPipeline {
         return result.cropped(to: source.extent)
     }
 
+    private func automaticDevelop(_ source: CIImage, plan: AstroAutoPlan) throws -> CIImage {
+        guard plan.backgroundCoefficients.count == 3,
+              plan.backgroundCoefficients.allSatisfy({ $0.count == 6 }),
+              plan.backgroundReference.count == 3, plan.channelGains.count == 3 else {
+            throw LabError.invalid("The saved automatic processing plan is invalid. Your original is safe.")
+        }
+        let gridWidth = 64, gridHeight = 64
+        var correction = [Float](repeating: 0, count: gridWidth * gridHeight * 4)
+        for y in 0..<gridHeight { for x in 0..<gridWidth {
+            let nx = (Double(x) + 0.5) / Double(gridWidth)
+            let ny = 1 - (Double(y) + 0.5) / Double(gridHeight)
+            let basis = [1.0, nx, ny, nx*nx, nx*ny, ny*ny]
+            let i = (y * gridWidth + x) * 4
+            for channel in 0..<3 {
+                let background = zip(plan.backgroundCoefficients[channel], basis).reduce(0) { $0 + $1.0 * $1.1 }
+                correction[i + channel] = Float(plan.backgroundReference[channel] - background)
+            }
+            correction[i + 3] = 0
+        } }
+        let correctionData = correction.withUnsafeBytes { Data($0) }
+        var field = CIImage(bitmapData: correctionData, bytesPerRow: gridWidth * 4 * MemoryLayout<Float>.size,
+            size: CGSize(width: gridWidth, height: gridHeight), format: .RGBAf, colorSpace: colorSpace)
+        field = field.transformed(by: CGAffineTransform(scaleX: source.extent.width / CGFloat(gridWidth),
+            y: source.extent.height / CGFloat(gridHeight)))
+            .transformed(by: CGAffineTransform(translationX: source.extent.minX, y: source.extent.minY))
+            .cropped(to: source.extent)
+        guard var result = CIFilter(name: "CIAdditionCompositing", parameters: [kCIInputImageKey: field,
+            kCIInputBackgroundImageKey: source])?.outputImage?.cropped(to: source.extent) else {
+            throw LabError.invalid("Background correction could not be rendered.")
+        }
+
+        let span = max(0.05, plan.whitePoint - plan.blackPoint)
+        let scales = plan.channelGains.map { $0 / span }
+        let bias = -plan.blackPoint / span
+        guard let normalized = CIFilter(name: "CIColorMatrix", parameters: [kCIInputImageKey: result,
+            "inputRVector": CIVector(x: scales[0], y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: scales[1], z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: scales[2], w: 0),
+            "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 0)])?.outputImage else {
+            throw LabError.invalid("Sky normalization could not be rendered.")
+        }
+        result = normalized.cropped(to: source.extent)
+
+        // Denoise only the low-signal background. Bright source structures stay untouched.
+        if plan.noiseLevel > 0,
+           let denoised = CIFilter(name: "CINoiseReduction", parameters: [kCIInputImageKey: result,
+                "inputNoiseLevel": min(0.04, plan.noiseLevel), "inputSharpness": 0.08])?.outputImage,
+           let mask = intensityMask(result, low: 0.18, high: 0.58, inverted: true),
+           let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: denoised,
+                kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
+            result = blended.cropped(to: source.extent)
+        }
+
+        guard let stretched = CIFilter(name: "CIGammaAdjust", parameters: [kCIInputImageKey: result,
+            "inputPower": min(0.96, max(0.68, plan.gamma))])?.outputImage else {
+            throw LabError.invalid("Nonlinear signal stretch could not be rendered.")
+        }
+        result = stretched.cropped(to: source.extent)
+
+        // A broad unsharp pass increases real source contrast; a source-derived mask excludes star cores.
+        let radius = min(28.0, max(4.0, Double(max(source.extent.width, source.extent.height)) / 175.0))
+        if let enhanced = CIFilter(name: "CIUnsharpMask", parameters: [kCIInputImageKey: result,
+            kCIInputRadiusKey: radius, kCIInputIntensityKey: min(0.32, max(0, plan.localContrast))])?.outputImage,
+           let mask = intensityMask(result, low: 0.48, high: 0.82, inverted: true),
+           let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: enhanced,
+            kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
+            result = blended.cropped(to: source.extent)
+        }
+
+        if plan.saturation != 1,
+           let colored = CIFilter(name: "CIColorControls", parameters: [kCIInputImageKey: result,
+            kCIInputSaturationKey: min(1.22, max(0.9, plan.saturation)), kCIInputContrastKey: 1.0])?.outputImage,
+           let mask = intensityMask(result, low: 0.58, high: 0.92, inverted: true),
+           let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: colored,
+            kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
+            result = blended.cropped(to: source.extent)
+        }
+        return result
+    }
+
+    private func intensityMask(_ image: CIImage, low: Double, high: Double, inverted: Bool) -> CIImage? {
+        let n = 16
+        var cube: [Float] = []; cube.reserveCapacity(n*n*n*4)
+        for b in 0..<n { for g in 0..<n { for r in 0..<n {
+            let luma = 0.2126 * Double(r) / Double(n-1) + 0.7152 * Double(g) / Double(n-1) + 0.0722 * Double(b) / Double(n-1)
+            let t = min(1, max(0, (luma - low) / max(0.001, high - low)))
+            let smooth = t*t*(3-2*t)
+            let value = Float(inverted ? 1-smooth : smooth)
+            cube.append(contentsOf: [value, value, value, 1])
+        } } }
+        let data = cube.withUnsafeBytes { Data($0) }
+        return CIFilter(name: "CIColorCubeWithColorSpace", parameters: [kCIInputImageKey: image,
+            "inputCubeDimension": n, "inputCubeData": data, "inputColorSpace": colorSpace])?.outputImage
+    }
+
+    private func analyze(_ image: CGImage) throws -> (measurement: PhotoMeasurement, plan: AstroAutoPlan?) {
+        let scale = min(1, 1024.0 / Double(max(image.width, image.height)))
+        let w = max(1, Int(Double(image.width)*scale)), h = max(1, Int(Double(image.height)*scale))
+        let bytes = try rgba(image, width: w, height: h)
+        guard let measurement = PhotoMeasurement.measure(rgba: bytes, width: w, height: h) else {
+            throw LabError.invalid("Image analysis failed; no guessed settings were applied.")
+        }
+        return (measurement, AstroAutoPlan.analyze(rgba: bytes, width: w, height: h))
+    }
+
     private func measure(_ image: CGImage) throws -> PhotoMeasurement {
         let scale = min(1, 384.0 / Double(max(image.width, image.height)))
         let w = max(1, Int(Double(image.width)*scale)), h = max(1, Int(Double(image.height)*scale))
-        var bytes = [UInt8](repeating: 0, count: w*h*4)
+        let bytes = try rgba(image, width: w, height: h)
+        guard let m = PhotoMeasurement.measure(rgba: bytes, width: w, height: h) else { throw LabError.invalid("Image analysis failed; no guessed settings were applied.") }
+        return m
+    }
+
+    private func rgba(_ image: CGImage, width: Int, height: Int) throws -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: width*height*4)
         let ok = bytes.withUnsafeMutableBytes { buffer -> Bool in
-            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w*4,
+            guard let ctx = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width*4,
                 space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
             ctx.interpolationQuality = .high
-            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
-        guard ok, let m = PhotoMeasurement.measure(rgba: bytes, width: w, height: h) else { throw LabError.invalid("Image analysis failed; no guessed settings were applied.") }
-        return m
+        guard ok else { throw LabError.invalid("The image could not be sampled for analysis.") }
+        return bytes
     }
 
     private func thumbnail(_ source: CGImageSource, maxPixel: Int) throws -> CGImage {

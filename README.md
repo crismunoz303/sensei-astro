@@ -4,7 +4,9 @@ Native SwiftUI iPhone companion for a Seestar S30 Pro on a standard tripod.
 Tonight and Targets provide locally ranked capture plans. True Edit provides
 conventional photo processing while preserving the imported source bytes.
 
-## Version 1.3.0
+## Version 1.4.0
+
+True Edit now builds a deterministic astrophotography development plan from each imported image: robust large-scale background modeling, per-channel sky neutralization, measured black/white normalization, controlled nonlinear stretch, background-masked denoise, star-protected local contrast, and highlight-safe color enhancement. It never uses generative AI or replacement imagery, and the imported bytes remain checksum-verified and unchanged.
 
 True Edit now keeps recoverable projects, applies a conservative starting edit
 from measured image statistics, supports undo and comparison, protects bright source pixels, and

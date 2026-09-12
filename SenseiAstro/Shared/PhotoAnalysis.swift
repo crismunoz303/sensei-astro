@@ -111,6 +111,150 @@ struct PhotoMeasurement: Codable, Equatable {
     }
 }
 
+/// A deterministic, source-measured astrophotography development plan.
+/// Coefficients model the large-scale sRGB background as
+/// 1, x, y, x², xy, y². Nothing here can synthesize image content.
+struct AstroAutoPlan: Codable, Equatable {
+    let backgroundCoefficients: [[Double]]
+    let backgroundReference: [Double]
+    let channelGains: [Double]
+    let blackPoint: Double
+    let whitePoint: Double
+    let gamma: Double
+    let noiseLevel: Double
+    let localContrast: Double
+    let saturation: Double
+    let skyLevel: Double
+    let skySigma: Double
+    let sampledTiles: Int
+
+    var operations: [String] {
+        [
+            "Sigma-clipped quadratic background model from \(sampledTiles) low-signal tiles",
+            "Per-channel sky neutralization; gains \(channelGains.map { String(format: \"%.3f\", $0) }.joined(separator: \", \"))",
+            String(format: "Measured black/white normalization: %.4f / %.4f", blackPoint, whitePoint),
+            String(format: "Controlled nonlinear stretch: gamma %.3f", gamma),
+            String(format: "Background-masked conventional noise reduction: %.4f", noiseLevel),
+            String(format: "Star-protected local contrast: %.3f", localContrast),
+            String(format: "Highlight-safe color enhancement: %.3f", saturation),
+        ]
+    }
+
+    static func analyze(rgba: [UInt8], width: Int, height: Int) -> AstroAutoPlan? {
+        guard width >= 24, height >= 24, width <= 2048, height <= 2048,
+              rgba.count == width * height * 4 else { return nil }
+        let columns = 18, rows = 12
+        struct Tile { let x, y: Double; let rgb: [Double]; let luma: Double }
+        var tiles: [Tile] = []
+        for ty in 0..<rows { for tx in 0..<columns {
+            let x0 = tx * width / columns, x1 = max(x0 + 1, (tx + 1) * width / columns)
+            let y0 = ty * height / rows, y1 = max(y0 + 1, (ty + 1) * height / rows)
+            var channels = [[Double](), [Double](), [Double]()]
+            let sx = max(1, (x1 - x0) / 10), sy = max(1, (y1 - y0) / 10)
+            for py in stride(from: y0, to: min(height, y1), by: sy) {
+                for px in stride(from: x0, to: min(width, x1), by: sx) {
+                    let i = (py * width + px) * 4
+                    guard rgba[i + 3] >= 250 else { continue }
+                    channels[0].append(Double(rgba[i]) / 255)
+                    channels[1].append(Double(rgba[i + 1]) / 255)
+                    channels[2].append(Double(rgba[i + 2]) / 255)
+                }
+            }
+            guard channels[0].count >= 8 else { continue }
+            let rgb = channels.map { percentile($0.sorted(), 0.5) }
+            let l = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+            tiles.append(Tile(x: (Double(tx) + 0.5) / Double(columns), y: (Double(ty) + 0.5) / Double(rows), rgb: rgb, luma: l))
+        } }
+        guard tiles.count >= 30 else { return nil }
+        let ordered = tiles.sorted { $0.luma < $1.luma }
+        var selected = Array(ordered.prefix(max(24, Int(Double(ordered.count) * 0.42))))
+        var coefficients = (0..<3).map { channel in
+            fit(selected.map { ($0.x, $0.y, $0.rgb[channel]) })
+        }
+        guard coefficients.allSatisfy({ $0.count == 6 }) else { return nil }
+
+        // Reject bright nebulosity, stars and residual hot tiles by model residual, then refit.
+        for _ in 0..<2 {
+            let residuals = selected.map { tile -> Double in
+                let predicted = (0..<3).map { evaluate(coefficients[$0], tile.x, tile.y) }
+                return abs((0.2126 * (tile.rgb[0] - predicted[0]) + 0.7152 * (tile.rgb[1] - predicted[1]) + 0.0722 * (tile.rgb[2] - predicted[2])))
+            }
+            let med = percentile(residuals.sorted(), 0.5)
+            let mad = percentile(residuals.map { abs($0 - med) }.sorted(), 0.5) + 1.0 / 4096
+            let kept = zip(selected, residuals).filter { $0.1 <= med + 3.5 * 1.4826 * mad }.map(\.0)
+            if kept.count >= 20 { selected = kept }
+            coefficients = (0..<3).map { channel in fit(selected.map { ($0.x, $0.y, $0.rgb[channel]) }) }
+        }
+
+        let center = (0..<3).map { min(0.8, max(0, evaluate(coefficients[$0], 0.5, 0.5))) }
+        let neutral = percentile(center.sorted(), 0.5)
+        let gains = center.map { min(1.35, max(0.75, neutral / max($0, 1.0 / 255))) }
+        var luminance: [Double] = []
+        luminance.reserveCapacity(min(width * height, 300_000))
+        let step = max(1, Int(sqrt(Double(width * height) / 250_000)))
+        for py in stride(from: 0, to: height, by: step) {
+            for px in stride(from: 0, to: width, by: step) {
+                let i = (py * width + px) * 4
+                guard rgba[i + 3] >= 250 else { continue }
+                let x = (Double(px) + 0.5) / Double(width), y = (Double(py) + 0.5) / Double(height)
+                var c = [Double](repeating: 0, count: 3)
+                for channel in 0..<3 {
+                    let raw = Double(rgba[i + channel]) / 255
+                    c[channel] = max(0, (raw - evaluate(coefficients[channel], x, y) + center[channel]) * gains[channel])
+                }
+                luminance.append(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+            }
+        }
+        guard luminance.count > 100 else { return nil }
+        let sorted = luminance.sorted()
+        let skyPool = Array(sorted.prefix(max(50, Int(Double(sorted.count) * 0.58))))
+        let sky = percentile(skyPool, 0.5)
+        let sigma = 1.4826 * percentile(skyPool.map { abs($0 - sky) }.sorted(), 0.5)
+        let black = min(sky * 0.88, max(0, min(percentile(sorted, 0.012), sky - 2.15 * sigma)))
+        let white = max(black + 0.25, min(1, max(0.72, percentile(sorted, 0.9995))))
+        let headroom = max(0, 1 - percentile(sorted, 0.999))
+        let gamma = min(0.90, max(0.74, 0.84 - min(0.08, max(0, (0.11 - sky) * 0.45))))
+        return AstroAutoPlan(backgroundCoefficients: coefficients, backgroundReference: center,
+            channelGains: gains, blackPoint: black, whitePoint: white, gamma: gamma,
+            noiseLevel: min(0.035, max(0.006, sigma * 0.55)),
+            localContrast: headroom < 0.02 ? 0.12 : 0.22,
+            saturation: headroom < 0.02 ? 1.08 : 1.16,
+            skyLevel: sky, skySigma: sigma, sampledTiles: selected.count)
+    }
+
+    private static func evaluate(_ c: [Double], _ x: Double, _ y: Double) -> Double {
+        guard c.count == 6 else { return 0 }
+        return c[0] + c[1] * x + c[2] * y + c[3] * x * x + c[4] * x * y + c[5] * y * y
+    }
+
+    private static func fit(_ samples: [(Double, Double, Double)]) -> [Double] {
+        var a = Array(repeating: Array(repeating: 0.0, count: 7), count: 6)
+        for (x, y, value) in samples {
+            let v = [1.0, x, y, x*x, x*y, y*y]
+            for r in 0..<6 {
+                for c in 0..<6 { a[r][c] += v[r] * v[c] }
+                a[r][6] += v[r] * value
+            }
+        }
+        for pivot in 0..<6 {
+            guard let row = (pivot..<6).max(by: { abs(a[$0][pivot]) < abs(a[$1][pivot]) }), abs(a[row][pivot]) > 1e-10 else { return [] }
+            if row != pivot { a.swapAt(row, pivot) }
+            let d = a[pivot][pivot]
+            for c in pivot..<7 { a[pivot][c] /= d }
+            for r in 0..<6 where r != pivot {
+                let m = a[r][pivot]
+                for c in pivot..<7 { a[r][c] -= m * a[pivot][c] }
+            }
+        }
+        return a.map { $0[6] }
+    }
+
+    private static func percentile(_ values: [Double], _ q: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values[min(values.count - 1, max(0, Int(Double(values.count - 1) * q)))]
+    }
+}
+
 struct PhotoAdvice {
     let recipe: PhotoRecipe
     let reasons: [String]
@@ -137,7 +281,7 @@ struct PhotoAdvice {
         reasons.append("Denoise and sharpening stay off until you inspect fine detail. Brightness alone cannot measure noise.")
         if m.clippedHighlights > 0.001 { warnings.append("Some sampled color channels are already clipped. Lost detail cannot be recovered from this file.") }
         if m.crushedBlacks > 0.01 { warnings.append("Some sampled pixels are already black. A lift may expose compression, not real detail.") }
-        if m.backgroundSpread > 0.06 { warnings.append("Uneven brightness detected. It may be real structure, vignetting, or a gradient; no automatic subtraction is applied.") }
+        if m.backgroundSpread > 0.06 { warnings.append("Strong large-scale variation was detected. Compare the modeled correction carefully so real extended structure is not mistaken for sky glow.") }
         if m.fineVariation > 0.01 { warnings.append("Fine-scale variation is present; stars, texture, and noise all contribute. Do not treat this as a pure noise estimate.") }
         return PhotoAdvice(recipe: recipe.bounded, reasons: reasons, warnings: warnings)
     }

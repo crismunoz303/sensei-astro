@@ -12,6 +12,7 @@ final class PhotoLabStore: ObservableObject {
     @Published private(set) var after: PhotoMeasurement?
     @Published var recipe = PhotoRecipe.identity { didSet { if !installing && oldValue != recipe { schedulePreview() } } }
     @Published var intent = PhotoIntent.astro { didSet { if !installing && oldValue != intent { schedulePreview() } } }
+    @Published var automaticProcessing = true { didSet { if !installing && oldValue != automaticProcessing { schedulePreview() } } }
     @Published var format = LabExportFormat.png
     @Published private(set) var operation: String?
     @Published private(set) var rendering = false
@@ -92,14 +93,13 @@ final class PhotoLabStore: ObservableObject {
         original = UIImage(cgImage: loaded.preview); edited = original
         before = loaded.measurement; after = loaded.measurement
         intent = loaded.project.intent
+        automaticProcessing = loaded.project.automaticProcessingDisabled != true && loaded.project.astroPlan != nil
         message = nil
-        if automaticStart && !loaded.project.recipe.hasAdjustments {
-            recipe = PhotoAdvice.make(loaded.measurement, intent: intent).recipe
-            message = recipe.hasAdjustments
-                ? "Measured starting edit applied automatically. Your original remains unchanged."
-                : "Analysis found no safe automatic improvement, so the image remains neutral."
-        } else {
-            recipe = loaded.project.recipe.bounded
+        recipe = loaded.project.recipe.bounded
+        if automaticStart {
+            message = loaded.project.astroPlan == nil
+                ? "This image did not contain enough usable samples for an automatic plan; manual controls remain available."
+                : "Astrophotography development applied from measured source pixels. Your original remains unchanged."
         }
         undoStack = []; redoStack = []; exportResult = nil; originalExport = nil
         installing = false
@@ -120,6 +120,7 @@ final class PhotoLabStore: ObservableObject {
     private func snapshot() -> PhotoProject? {
         guard var p = project else { return nil }
         p.recipe = recipe.bounded; p.intent = intent; p.updated = Date()
+        p.automaticProcessingDisabled = !automaticProcessing
         return p
     }
 

@@ -1,4 +1,4 @@
-# Sensei Astro Studio 1.3.0
+# Sensei Astro Studio 1.4.0
 
 Native iPhone companion for Seestar S30 Pro capture planning and conventional,
 original-preserving photo editing. Red/dark interface and Sensei's existing

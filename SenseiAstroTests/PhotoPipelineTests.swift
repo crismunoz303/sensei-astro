@@ -3,6 +3,27 @@ import Foundation
 @testable import SenseiAstroCore
 
 final class PhotoAnalysisTests: XCTestCase {
+    func testAstroPlanModelsAColorGradientAndProducesBoundedDevelopment() throws {
+        let width = 180, height = 120
+        var rgba = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height { for x in 0..<width {
+            let i = (y * width + x) * 4
+            let gradient = Double(x) / Double(width - 1) * 28 + Double(y) / Double(height - 1) * 12
+            rgba[i] = UInt8(min(250, 19 + Int(gradient)))
+            rgba[i + 1] = UInt8(min(250, 16 + Int(gradient * 0.82)))
+            rgba[i + 2] = UInt8(min(250, 24 + Int(gradient * 1.08)))
+            if (x * 17 + y * 31) % 401 == 0 { rgba[i] = 230; rgba[i + 1] = 225; rgba[i + 2] = 245 }
+        } }
+        let plan = try XCTUnwrap(AstroAutoPlan.analyze(rgba: rgba, width: width, height: height))
+        XCTAssertEqual(plan.backgroundCoefficients.count, 3)
+        XCTAssertTrue(plan.backgroundCoefficients.allSatisfy { $0.count == 6 && $0.allSatisfy(\.isFinite) })
+        XCTAssertEqual(plan.channelGains.count, 3)
+        XCTAssertTrue(plan.channelGains.allSatisfy { (0.75...1.35).contains($0) })
+        XCTAssertGreaterThan(plan.whitePoint, plan.blackPoint)
+        XCTAssertTrue((0.68...0.96).contains(plan.gamma))
+        XCTAssertGreaterThanOrEqual(plan.sampledTiles, 20)
+        XCTAssertTrue(plan.operations.joined().contains("quadratic background"))
+    }
     func testBlackSkyDoesNotTriggerAutomaticExposure() throws {
         let m = try XCTUnwrap(PhotoMeasurement.measure(rgba: Array(repeating: [UInt8(0),0,0,255], count: 64).flatMap { $0 }, width: 8, height: 8))
         XCTAssertEqual(m.crushedBlacks, 1)
@@ -69,6 +90,7 @@ final class PhotoPipelineTests: XCTestCase {
         let projects = try await restored.projects()
         let opened = try await restored.open(XCTUnwrap(projects.first))
         XCTAssertEqual(opened.project.recipe, p.recipe)
+        XCTAssertNotNil(opened.project.astroPlan)
         XCTAssertEqual(opened.project.sha256.count, 64)
         let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: export.reportURL)) as? [String: Any])
         XCTAssertNotNil(report["outputSHA256"])
@@ -111,6 +133,18 @@ final class PhotoPipelineTests: XCTestCase {
         p.recipe = .identity
         let reset = try await engine.render(p)
         XCTAssertEqual(reset.image.dataProvider?.data as Data?, baseline.image.dataProvider?.data as Data?)
+    }
+
+    func testAutomaticAstroDevelopmentChangesPreviewAndCanBeDisabled() async throws {
+        let engine = PhotoPipeline(root: root)
+        var p = try await engine.importData(fixture()).project
+        XCTAssertNotNil(p.astroPlan)
+        let developed = try await engine.render(p)
+        p.automaticProcessingDisabled = true
+        let neutral = try await engine.render(p)
+        XCTAssertNotEqual(developed.image.dataProvider?.data as Data?, neutral.image.dataProvider?.data as Data?)
+        XCTAssertEqual(neutral.image.width, p.width)
+        XCTAssertEqual(neutral.image.height, p.height)
     }
 
     func testEveryConventionalOperationCanRenderWithoutChangingGeometry() async throws {
