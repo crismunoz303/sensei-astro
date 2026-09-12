@@ -31,3 +31,23 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  SenseiAstroUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SenseiAstroUITests
+    dependencies:
+      - target: SenseiAstro
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sensei.astro.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SenseiAstro
+schemes:
+  SenseiAstro:
+    build:
+      targets:
+        SenseiAstro: all
+    test:
+      targets:
+        - SenseiAstroUITests

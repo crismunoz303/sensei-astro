@@ -1,52 +1,86 @@
-# Sensei Astro Studio — Product Blueprint
+# Sensei Astro Studio 1.3.0
 
-## Product promise
+Native iPhone companion for Seestar S30 Pro capture planning and conventional,
+original-preserving photo editing. Red/dark interface and Sensei's existing
+Andromeda icon. The user operates the telescope in the Seestar app.
 
-One private iPhone workflow for planning a Seestar S30 Pro capture and finishing
-the resulting real photograph. The editor is not an image generator.
+## True Edit
 
-## Non-negotiable integrity rules
+- Import JPEG, PNG, HEIC and single-image TIFF through Photos or Files.
+- Keep the imported bytes unchanged in Application Support; verify SHA-256 on
+  import, reopening, source backup, detail inspection and export.
+- Save recipes atomically and recover the most recent project on relaunch.
+- Start neutral. Measure a sampled sRGB histogram, median, percentile 99,
+  near-clipping, regional brightness spread and fine variation.
+- Offer explanations and require a tap before applying suggested adjustments.
+- Astro advice never infers light pollution from color or treats all dark sky
+  as underexposure. Fine variation is not called pure noise or scientific SNR.
+- Exposure, midtone curve, contrast, saturation, relative red/blue adjustment;
+  optional conventional denoise and luminance sharpening, initially off.
+- Source-derived highlight mask blends bright original pixels into the result.
+- Undo/redo, neutral reset, original comparison, pinch/pan inspection, and nine
+  source-resolution detail regions rendered from the original image.
+- Full-resolution sRGB PNG (8-bit) or TIFF (16-bit). Orientation is baked in;
+  edited exports omit source location metadata. No crop or geometric warp.
+- Verify output dimensions and TIFF bit depth; produce JSON audit of recipe,
+  engine version, source identity and output checksum.
+- Wait for PhotoKit confirmation before reporting success. Failed permission or
+  save leaves the verified export available for Files sharing.
+- Photo operations run through a serialized actor, with debounced cancellable
+  previews and generation checks to reject obsolete preview results.
 
-1. Never overwrite or destructively modify the imported source.
-2. Never use generative fill, inpainting, object replacement, synthetic stars,
-   hallucinated detail, or pixels borrowed from a generic image.
-3. Preserve composition and object placement unless the user explicitly crops.
-4. Store edits as a reversible recipe and export only a separate copy.
-5. Clearly label ORIGINAL and EDITED COPY and provide instant comparison.
-6. Display the source hash so a session remains tied to the exact input file.
-7. Explain every automated recommendation in photographic language.
+## Capture planner
 
-## App structure
+- Preserve the existing local target ranking, favorites, filters, estimated
+  accepted-stack goals, standard tripod / Alt-Az plans and shareable sequence.
+- Require consecutive usable sample endpoints. Sessions never extend beyond
+  the selected astronomical night or invent a 15-minute session in 14 minutes.
+- Reject missing, invalid, or distant weather rather than treating it as clear.
+  Incomplete weather windows remain provisional and their scores are capped.
+- Identify scores as planning heuristics; distinguish the best sampled time
+  from exact astronomical culmination. No confidence percentages are implied.
+- Photo editor remains available while astronomy data loads.
 
-- Tonight: local ranked targets and complete S30 Pro capture plans.
-- Targets: searchable ranked catalog and favorites.
-- True Edit: import, analyze, preview, manually refine, compare, reset, and save.
+## Verification
 
-## True Edit version 1
+Shared SwiftPM tests execute the same Core Image processing code compiled into
+the iPhone app. Tests cover corrupted inputs, original-byte integrity, project
+recovery, repeat import, real 16-bit export, stripped GPS, EXIF orientations,
+neutral reset, the complete filter chain, highlight protection, source-detail
+rendering, weather parsing, stale forecasts and bounded observing sessions.
 
-- Photos import with the original bytes retained unchanged in memory.
-- Deterministic measurement of average luminance and color distribution.
-- Conservative exposure, contrast, saturation, vibrance, denoise, and luminance
-  sharpening recommendations.
-- Conventional Core Image filters only; no generative image model.
-- Press-and-hold original comparison and a reset-to-original control.
-- Separate-copy export to Photos.
+An iPhone Simulator UI test exercises compare, source inspection, recommendation,
+export and project recovery using a deterministic DEBUG-only chart. It does not
+use or modify Sensei's real photographs. Release excludes the chart and launch
+hooks. Simulator results do not replace testing on Sensei's physical iPhone or
+with his live Seestar session.
 
-## Higher-power completion roadmap
+## Explicit limits and future work
 
-1. Add histogram, clipping map, star-core protection, and background-gradient map.
-2. Add dedicated Astro, Night, Portrait, and General analyzers while retaining
-   the same integrity rules.
-3. Add FITS/TIFF import and high-bit-depth processing for Seestar source data.
-4. Add local edit history, named recipes, batch processing, and metadata reports.
-5. Learn preferences only from accepted slider changes; never train a generator.
-6. Add unit tests for recipe limits and golden-image tests that verify geometry
-   and dimensions never change unexpectedly.
-7. Add a final export audit listing every operation applied to the copy.
+No trained specialist AI, generative image model, synthetic stars, background
+replacement, object removal or learned reconstruction exists in this build.
+Conventional processing can still suppress detail or create artifacts; the
+original remains recoverable and comparisons are provided.
 
-## Definition of done
+Import is limited to 25 MP / 100 MB. FITS calibration/stacking, Bayer demosaicing,
+camera RAW development, scientific color calibration, star classification,
+gradient subtraction and learned personal preferences remain future work.
+16-bit output cannot recover lost input precision. sRGB export is not an HDR or
+wide-gamut archival workflow. Do not delete the app without backing up projects.
 
-The user can plan tonight's S30 Pro session, import the resulting real image,
-receive an explainable conservative recommendation, compare it with the locked
-original, adjust it, and save a separate finished copy without any generative
-or replacement imagery entering the pipeline.
+Planner coordinates, lunar model and 15-minute sampling are approximate. It has
+no measured local horizon, seeing, transparency, live telescope feedback or
+guarantee of accepted-frame efficiency. Forecast cloud percentages are not a
+measurement of the sky above the telescope. Check conditions before capture.
+
+## Primary references
+
+- https://www.seestar.com/blogs/faq/seestar-s30-pro-faq
+- https://open-meteo.com/en/docs
+- https://aa.usno.navy.mil/data/api
+- https://developer.apple.com/documentation/coreimage
+- https://developer.apple.com/documentation/photokit/phphotolibrary
+
+These establish API and equipment behavior. App-specific recommendation weights
+and exposure/integration starting points are heuristics, not manufacturer-certified
+optimal settings.

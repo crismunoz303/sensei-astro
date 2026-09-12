@@ -46,6 +46,13 @@ struct LabRenderedPhoto {
     let measurement: PhotoMeasurement
 }
 
+struct LabDetail {
+    let original: CGImage
+    let edited: CGImage
+    let width: Int
+    let height: Int
+}
+
 struct LabExport: Identifiable {
     let id = UUID()
     let imageURL: URL
@@ -150,6 +157,25 @@ actor PhotoPipeline {
         let url = folder.appendingPathComponent("Original-\(project.sha256.prefix(10)).\(project.sourceExtension)")
         try manager.copyItem(at: sourceURL(project), to: url)
         return url
+    }
+
+    func inspect(_ project: PhotoProject, region: Int) throws -> LabDetail {
+        try verify(project); try Task.checkCancellation()
+        guard let input = CIImage(contentsOf: sourceURL(project), options: [.applyOrientationProperty: true]) else {
+            throw LabError.invalid("The source could not be opened for detail inspection.")
+        }
+        let area = input.extent
+        let w = min(1024, area.width), h = min(1024, area.height)
+        let cell = min(8, max(0, region))
+        let rect = CGRect(x: area.minX + (area.width-w)*CGFloat(cell%3)/2,
+            y: area.minY + (area.height-h)*CGFloat(2-cell/3)/2, width: w, height: h).integral
+        let output = try process(input, recipe: project.recipe.bounded)
+        guard let original = context.createCGImage(input, from: rect, format: .RGBA8, colorSpace: colorSpace),
+              let edited = context.createCGImage(output, from: rect, format: .RGBA8, colorSpace: colorSpace) else {
+            throw LabError.invalid("Detail rendering failed. Your original remains saved.")
+        }
+        try Task.checkCancellation()
+        return LabDetail(original: original, edited: edited, width: original.width, height: original.height)
     }
 
     func export(_ project: PhotoProject, format: LabExportFormat) throws -> LabExport {

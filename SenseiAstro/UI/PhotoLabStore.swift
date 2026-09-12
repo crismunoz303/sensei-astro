@@ -34,6 +34,20 @@ final class PhotoLabStore: ObservableObject {
         guard !restored else { return }; restored = true
         do {
             projects = try await pipeline.projects()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--photo-ui-test"), projects.isEmpty {
+                // Deterministic test chart. Never included in the Release app or user projects.
+                let renderer = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 240))
+                let image = renderer.image { context in
+                    for x in 0..<320 {
+                        UIColor(white: CGFloat(x+10)/800, alpha: 1).setFill()
+                        context.fill(CGRect(x: x, y: 0, width: 1, height: 240))
+                    }
+                }
+                if let bytes = image.pngData() { try await install(pipeline.importData(bytes)) }
+                return
+            }
+            #endif
             if let latest = projects.first { await open(latest) }
         } catch { self.error = error.localizedDescription }
     }
@@ -126,6 +140,11 @@ final class PhotoLabStore: ObservableObject {
     func flush() async {
         guard let p = snapshot() else { return }
         do { try await pipeline.save(p) } catch { self.error = error.localizedDescription }
+    }
+
+    func detail(region: Int) async throws -> LabDetail {
+        guard let p = snapshot() else { throw LabError.invalid("Import a photo first.") }
+        return try await pipeline.inspect(p, region: region)
     }
 
     func prepareExport(saveToPhotos: Bool) async {

@@ -45,6 +45,17 @@ final class PlannerEngineTests: XCTestCase {
         XCTAssertNil(plan.weather); XCTAssertLessThanOrEqual(plan.score, 69)
     }
 
+    func testMissingWeatherNeverBecomesZeroClouds() throws {
+        let json = """
+        {"hourly":{"time":[1789174800,1789178400],"cloud_cover":[null,15],
+        "precipitation_probability":[0,0],"relative_humidity_2m":[50,50],
+        "dew_point_2m":[40,40],"temperature_2m":[60,60],"wind_speed_10m":[3,3],"wind_gusts_10m":[5,5]}}
+        """
+        let points = try WeatherClient.decode(Data(json.utf8))
+        XCTAssertEqual(points.count, 1); XCTAssertEqual(points.first?.cloudPercent, 15)
+        XCTAssertEqual(points.first?.time.timeIntervalSince1970, 1789178400)
+    }
+
     func testOfflineRankIsCappedBelowExcellent() throws {
         let start = date("2026-09-12T03:00:00Z")
         let end = start.addingTimeInterval(6 * 3600)

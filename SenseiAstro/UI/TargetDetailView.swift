@@ -70,9 +70,13 @@ struct TargetDetailView: View {
                 step(2, "Power on the S30 Pro, connect in the Seestar app, and enter Stargazing mode.")
                 step(3, "Search for \(plan.target.id), tap GoTo, and let plate solving, centering, and autofocus finish.")
                 step(4, "Set \(plan.filterText). Use \(plan.target.lens) with \(plan.target.framing.lowercased()).")
+                Text("Before stacking, enable saving individual FITS frames in Seestar if you want the original subframes for later processing. Start with 10-second subframes in standard Alt-Az mode where that setting is available; verify current app controls.")
+                    .font(.caption).foregroundStyle(AstroTheme.muted)
                 step(5, "Begin near \(plan.start.astroTime). Allow \(plan.sessionMinutes) minutes to collect about \(plan.integrationMinutes) accepted minutes; the app's live stack handles the individual frames.")
                 step(6, "Watch accepted versus rejected frames for five minutes. Re-level or shelter from wind if rejection rises.")
                 step(7, "Stop near \(plan.end.astroTime), or continue only while the target remains high and conditions stay clear.")
+                Link("Seestar S30 Pro: manufacturer guidance", destination: URL(string: "https://www.seestar.com/blogs/faq/seestar-s30-pro-faq")!)
+                    .font(.caption)
             }
         }
     }

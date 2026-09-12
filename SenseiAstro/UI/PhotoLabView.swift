@@ -72,7 +72,9 @@ struct PhotoLabView: View {
         }
         .sheet(isPresented: $showProjects) { projects }
         .sheet(isPresented: $inspector) {
-            if let original = lab.original, let edited = lab.edited { LabInspector(original: original, edited: edited) }
+            if let original = lab.original, let edited = lab.edited {
+                LabInspector(original: original, edited: edited, loadDetail: { try await lab.detail(region: $0) })
+            }
         }
     }
 
@@ -90,7 +92,7 @@ struct PhotoLabView: View {
                     Label(showOriginal ? "Show edit" : "Show original", systemImage: "circle.lefthalf.filled")
                 }.accessibilityIdentifier("compareOriginal")
                 Spacer()
-                Button { inspector = true } label: { Label("Inspect", systemImage: "arrow.up.left.and.arrow.down.right") }
+                Button { inspector = true } label: { Label("Inspect", systemImage: "arrow.up.left.and.arrow.down.right") }.accessibilityIdentifier("inspectSource")
             }.font(.subheadline.bold())
             if lab.rendering { ProgressView("Updating preview…").tint(AstroTheme.red).font(.caption) }
             Text("Preview: up to 1,400 px. Export uses your full source resolution.")
@@ -131,7 +133,7 @@ struct PhotoLabView: View {
                 if let advice = lab.advice {
                     ForEach(advice.reasons, id: \.self) { Text($0).font(.subheadline) }
                     ForEach(advice.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(AstroTheme.amber) }
-                    Button("Apply suggested starting point") { lab.applyAdvice() }.buttonStyle(LabActionStyle(primary: true))
+                    Button("Apply suggested starting point") { lab.applyAdvice() }.buttonStyle(LabActionStyle(primary: true)).accessibilityIdentifier("applyAdvice")
                 }
                 Text("Recommendations use measured pixels and conservative rules. They are not a trained AI specialist or a guarantee of the best edit.")
                     .font(.caption2).foregroundStyle(AstroTheme.muted)
@@ -181,9 +183,9 @@ struct PhotoLabView: View {
                 Button { Task { await lab.prepareExport(saveToPhotos: true) } } label: { Label("Save edited copy to Photos", systemImage: "square.and.arrow.down") }
                     .buttonStyle(LabActionStyle(primary: true)).disabled(lab.busy || !lab.previewCurrent)
                 Button { Task { await lab.prepareExport(saveToPhotos: false) } } label: { Label("Prepare image + edit report", systemImage: "doc.text") }
-                    .buttonStyle(LabActionStyle()).disabled(lab.busy || !lab.previewCurrent)
+                    .buttonStyle(LabActionStyle()).disabled(lab.busy || !lab.previewCurrent).accessibilityIdentifier("prepareExport")
                 if let result = lab.exportResult {
-                    Text("Verified \(result.width) × \(result.height) · sRGB").font(.caption.bold()).foregroundStyle(AstroTheme.green)
+                    Text("Verified \(result.width) × \(result.height) · sRGB").font(.caption.bold()).foregroundStyle(AstroTheme.green).accessibilityIdentifier("exportVerified")
                     ShareLink(items: [result.imageURL, result.reportURL]) { Label("Share / Save to Files", systemImage: "square.and.arrow.up") }
                     Text("The report records every operation and full source/output checksums. Location metadata is omitted from edited exports.")
                         .font(.caption2).foregroundStyle(AstroTheme.muted)
@@ -275,19 +277,50 @@ private struct LabHistogram: View {
 private struct LabInspector: View {
     let original: UIImage
     let edited: UIImage
+    let loadDetail: (Int) async throws -> LabDetail
     @Environment(\.dismiss) private var dismiss
     @State private var showOriginal = false
+    @State private var sourceDetail = false
+    @State private var region = 4
+    @State private var detail: LabDetail?
+    @State private var detailError: String?
+    @State private var loading = false
+    private let regions = ["Top left", "Top center", "Top right", "Middle left", "Center", "Middle right", "Bottom left", "Bottom center", "Bottom right"]
+    private var displayed: UIImage {
+        if sourceDetail, let detail { return UIImage(cgImage: showOriginal ? detail.original : detail.edited) }
+        return showOriginal ? original : edited
+    }
     var body: some View {
         NavigationStack {
             VStack(spacing: 8) {
-                LabZoomView(image: showOriginal ? original : edited)
+                Picker("Inspection mode", selection: $sourceDetail) {
+                    Text("Whole preview").tag(false)
+                    Text("Source detail").tag(true)
+                }.pickerStyle(.segmented).padding(.horizontal)
+                if sourceDetail {
+                    Picker("Region", selection: $region) {
+                        ForEach(0..<9, id: \.self) { Text(regions[$0]).tag($0) }
+                    }.pickerStyle(.menu)
+                }
+                if loading { ProgressView("Reading source pixels…").tint(AstroTheme.red) }
+                if let detailError { Text(detailError).font(.caption).foregroundStyle(AstroTheme.amber) }
+                LabZoomView(image: displayed).id("\(sourceDetail)-\(region)")
                 Toggle("Show original", isOn: $showOriginal).padding(.horizontal)
-                Text("Pinch and pan the preview. Check the full export for pixel-level decisions.")
+                Text(sourceDetail && detail != nil ? "\(detail!.width) × \(detail!.height) source-pixel region. Pinch to inspect stars and halos. This crop is for inspection only; export keeps your full composition." : "Pinch and pan. Switch to Source detail to inspect original-resolution regions.")
                     .font(.caption).foregroundStyle(AstroTheme.muted).padding()
             }.background(.black).navigationTitle(showOriginal ? "Original" : "Edited preview")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
         }.preferredColorScheme(.dark).tint(AstroTheme.red)
+            .task(id: "\(sourceDetail)-\(region)") {
+                guard sourceDetail else { loading = false; return }
+                loading = true; detail = nil; detailError = nil
+                do {
+                    let result = try await loadDetail(region)
+                    try Task.checkCancellation(); detail = result; loading = false
+                } catch is CancellationError { }
+                catch { detailError = error.localizedDescription; loading = false }
+            }
     }
 }
 

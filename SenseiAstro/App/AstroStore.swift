@@ -25,12 +25,18 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     func start() {
         guard !started else { return }
         started = true
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--photo-ui-test") { selectedTab = .lab; return }
+        #endif
         locationManager.requestWhenInUseAuthorization()
         locationManager.requestLocation()
         Task { await refresh() }
     }
 
     func refresh() async {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--photo-ui-test") { return }
+        #endif
         guard !isLoading else { return }
         isLoading = true
         lastRefreshAttempt = Date()
@@ -46,7 +52,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         snapshot = result
         hasLoaded = true
         if result.plans.isEmpty {
-            errorMessage = "No catalog targets are above 25 degrees during tonight's observing window."
+            errorMessage = "No catalog target has a long enough window meeting the altitude and weather criteria."
         }
         isLoading = false
     }

@@ -82,7 +82,7 @@ struct TonightView: View {
                     .buttonStyle(.plain)
             }
             if snapshot.plans.count <= 1 {
-                Text("No additional targets clear tonight's safety and altitude checks.")
+                Text("No additional targets meet tonight's altitude, weather, and duration criteria.")
                     .font(.caption)
                     .foregroundStyle(AstroTheme.muted)
             }
@@ -106,12 +106,12 @@ struct TonightView: View {
                     Text("\(plan.target.id) // \(plan.target.name)")
                         .font(.title2.bold())
                         .foregroundStyle(AstroTheme.text)
-                    Text("START \(plan.start.astroTime)  •  PEAK \(plan.bestTime.astroTime)  •  STOP \(plan.end.astroTime)")
+                    Text("START \(plan.start.astroTime)  •  BEST \(plan.bestTime.astroTime)  •  STOP \(plan.end.astroTime)")
                         .font(.caption.bold().monospaced())
                         .foregroundStyle(AstroTheme.text)
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)
-                    Text("Best because it \(plan.rankReason)")
+                    Text("Why it ranks here: \(plan.rankReason)")
                         .font(.subheadline)
                         .foregroundStyle(AstroTheme.muted)
                     HStack {
@@ -142,10 +142,10 @@ struct TonightView: View {
     }
 
     private var verdict: (title: String, detail: String, icon: String, color: Color) {
-        if snapshot.sky.weather.isEmpty {
+        if snapshot.sky.weather.isEmpty || (best != nil && best?.weather == nil) {
             return ("CHECK CONDITIONS", "Weather unavailable. Target rankings are provisional.", "exclamationmark.triangle.fill", AstroTheme.amber)
         }
-        guard let best else { return ("SKIP TONIGHT", "No catalog targets clear the minimum altitude.", "xmark.circle.fill", AstroTheme.amber) }
+        guard let best else { return ("SKIP TONIGHT", "No catalog target meets the altitude, weather, and duration criteria.", "xmark.circle.fill", AstroTheme.amber) }
         if let weather = best.weather, weather.cloudPercent >= 70 || weather.precipitationPercent >= 50 || weather.gustMPH >= 22 {
             return ("SKIP TONIGHT", "Forecast conditions are unfavorable near the best window.", "cloud.rain.fill", AstroTheme.amber)
         }

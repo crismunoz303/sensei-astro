@@ -138,6 +138,45 @@ final class PhotoPipelineTests: XCTestCase {
         XCTAssertTrue(projects.isEmpty)
     }
 
+    func testSourceDetailUsesFullResolutionAndDoesNotRewriteSource() async throws {
+        let engine = PhotoPipeline(root: root)
+        let source = try fixture()
+        var p = try await engine.importData(source).project
+        p.recipe.exposure = 0.2
+        let detail = try await engine.inspect(p, region: 4)
+        XCTAssertEqual(detail.width, 64); XCTAssertEqual(detail.height, 48)
+        XCTAssertEqual(detail.original.width, detail.edited.width)
+        XCTAssertEqual(detail.original.height, detail.edited.height)
+        let copy = try await engine.originalCopy(p)
+        XCTAssertEqual(try Data(contentsOf: copy), source)
+    }
+
+    func testHighlightProtectionRetainsBrightSourceDuringExposureReduction() async throws {
+        let engine = PhotoPipeline(root: root)
+        let source = CIImage(color: CIColor(red: 0.99, green: 0.99, blue: 0.99)).cropped(to: CGRect(x: 0, y: 0, width: 32, height: 32))
+        let baseline = try await engine.renderImage(source, recipe: .identity)
+        var recipe = PhotoRecipe.identity; recipe.exposure = -1
+        let protected = try await engine.renderImage(source, recipe: recipe)
+        recipe.protectHighlights = false
+        let unprotected = try await engine.renderImage(source, recipe: recipe)
+        func brightness(_ image: CGImage) -> Double {
+            let data = image.dataProvider!.data! as Data
+            return Double(data[0])
+        }
+        XCTAssertLessThan(abs(brightness(protected)-brightness(baseline)), 3)
+        XCTAssertGreaterThan(brightness(protected)-brightness(unprotected), 30)
+    }
+
+    func testAllEXIFOrientationsPreserveExpectedGeometry() async throws {
+        let engine = PhotoPipeline(root: root)
+        for orientation in 1...8 {
+            let p = try await engine.importData(fixture(orientation: orientation)).project
+            let exported = try await engine.export(p, format: .png)
+            XCTAssertEqual(exported.width, orientation >= 5 ? 48 : 64)
+            XCTAssertEqual(exported.height, orientation >= 5 ? 64 : 48)
+        }
+    }
+
     private func fixture(orientation: Int = 1) throws -> Data {
         let width = 64, height = 48
         var pixels = [UInt8](repeating: 255, count: width * height * 4)
