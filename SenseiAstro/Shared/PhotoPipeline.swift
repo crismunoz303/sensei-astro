@@ -35,6 +35,12 @@ struct PhotoProject: Codable, Identifiable {
     var updated: Date
     var astroPlan: AstroAutoPlan?
     var automaticProcessingDisabled: Bool?
+    var automaticStrength: Double? = nil
+
+    var boundedAutomaticStrength: Double {
+        guard let value = automaticStrength, value.isFinite else { return 1 }
+        return min(1, max(0, value))
+    }
 }
 
 struct LabLoadedPhoto {
@@ -72,7 +78,7 @@ actor PhotoPipeline {
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private var cachedPreview: (UUID, CGImage)?
     private let manager = FileManager.default
-    static let engineVersion = "astro-develop-1.5.0"
+    static let engineVersion = "astro-develop-1.7.0"
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -138,7 +144,7 @@ actor PhotoPipeline {
         if upgraded.astroPlan?.planVersion != 2 ||
             upgraded.astroPlan?.backgroundCoefficients.allSatisfy({ $0.count == 10 }) != true {
             upgraded.astroPlan = analysis.plan
-            upgraded.automaticProcessingDisabled = false
+            // Reanalysis must not undo the user's choice to disable processing.
             upgraded.updated = Date()
             try save(upgraded)
         }
@@ -160,7 +166,8 @@ actor PhotoPipeline {
         if let cachedPreview, cachedPreview.0 == project.id { preview = cachedPreview.1 }
         else { preview = try open(project).preview }
         let result = try renderImage(CIImage(cgImage: preview), recipe: project.recipe,
-            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan)
+            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan,
+            automaticStrength: project.boundedAutomaticStrength)
         try Task.checkCancellation()
         return LabRenderedPhoto(image: result, measurement: try measure(result))
     }
@@ -184,7 +191,8 @@ actor PhotoPipeline {
         let rect = CGRect(x: area.minX + (area.width-w)*CGFloat(cell%3)/2,
             y: area.minY + (area.height-h)*CGFloat(2-cell/3)/2, width: w, height: h).integral
         let output = try process(input, recipe: project.recipe.bounded,
-            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan)
+            autoPlan: project.automaticProcessingDisabled == true ? nil : project.astroPlan,
+            automaticStrength: project.boundedAutomaticStrength)
         guard let original = context.createCGImage(input, from: rect, format: .RGBA8, colorSpace: colorSpace),
               let edited = context.createCGImage(output, from: rect, format: .RGBA8, colorSpace: colorSpace) else {
             throw LabError.invalid("Detail rendering failed. Your original remains saved.")
@@ -199,8 +207,9 @@ actor PhotoPipeline {
         guard let input = CIImage(contentsOf: sourceURL(project), options: [.applyOrientationProperty: true]) else {
             throw LabError.invalid("The original could not be decoded for export.")
         }
-        let activePlan = project.automaticProcessingDisabled == true ? nil : project.astroPlan
-        let output = try process(input, recipe: project.recipe.bounded, autoPlan: activePlan).settingProperties([:])
+        let activePlan = project.automaticProcessingDisabled == true || project.boundedAutomaticStrength == 0 ? nil : project.astroPlan
+        let output = try process(input, recipe: project.recipe.bounded, autoPlan: activePlan,
+            automaticStrength: project.boundedAutomaticStrength).settingProperties([:])
         let bytes: Data?
         switch format {
         case .png: bytes = context.pngRepresentation(of: output, format: .RGBA8, colorSpace: colorSpace)
@@ -237,23 +246,26 @@ actor PhotoPipeline {
                 "16-bit output does not recover precision or detail absent from the input."]
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        let operations = (activePlan?.operations ?? ["Automatic astrophotography processing disabled"]) + project.recipe.bounded.operations
+        let operations = (activePlan?.operations ?? ["Automatic astrophotography processing disabled"])
+            + [String(format: "Automatic development blend strength: %.3f", project.boundedAutomaticStrength)]
+            + project.recipe.bounded.operations
         try encoder.encode(Audit(project: project, format: format, outputSHA256: Self.hash(bytes), operations: operations))
             .write(to: reportURL, options: .atomic)
         return LabExport(imageURL: imageURL, reportURL: reportURL, originalSHA256: project.sha256, width: project.width, height: project.height)
     }
 
     // Internal so deterministic macOS regression tests exercise the actual iPhone processing code.
-    func renderImage(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan? = nil) throws -> CGImage {
-        let output = try process(source, recipe: recipe.bounded, autoPlan: autoPlan)
+    func renderImage(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan? = nil, automaticStrength: Double = 1) throws -> CGImage {
+        let output = try process(source, recipe: recipe.bounded, autoPlan: autoPlan, automaticStrength: automaticStrength)
         guard let image = context.createCGImage(output, from: source.extent, format: .RGBA8, colorSpace: colorSpace) else {
             throw LabError.invalid("Rendering failed. The original is safe.")
         }
         return image
     }
 
-    private func process(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan?) throws -> CIImage {
-        guard recipe.hasAdjustments || autoPlan != nil else { return source }
+    private func process(_ source: CIImage, recipe: PhotoRecipe, autoPlan: AstroAutoPlan?, automaticStrength: Double = 1) throws -> CIImage {
+        let strength = automaticStrength.isFinite ? min(1, max(0, automaticStrength)) : 1
+        guard recipe.hasAdjustments || (autoPlan != nil && strength > 0) else { return source }
         var result = source
         func filter(_ name: String, _ params: [String: Any]) throws {
             var values = params; values[kCIInputImageKey] = result
@@ -262,8 +274,16 @@ actor PhotoPipeline {
             }
             result = output
         }
-        if let plan = autoPlan {
+        if let plan = autoPlan, strength > 0 {
             result = try automaticDevelop(result, plan: plan)
+            if strength < 1 {
+                guard let blend = CIFilter(name: "CIDissolveTransition", parameters: [
+                    kCIInputImageKey: source, kCIInputTargetImageKey: result,
+                    kCIInputTimeKey: strength])?.outputImage else {
+                    throw LabError.invalid("Processing-strength blend failed. Your original is safe.")
+                }
+                result = blend.cropped(to: source.extent)
+            }
         }
         if recipe.exposure != 0 { try filter("CIExposureAdjust", [kCIInputEVKey: recipe.exposure]) }
         if recipe.warmth != 0 {

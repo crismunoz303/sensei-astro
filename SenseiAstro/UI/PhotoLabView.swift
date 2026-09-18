@@ -84,7 +84,7 @@ struct PhotoLabView: View {
                 Image(uiImage: (showOriginal ? lab.original : lab.edited) ?? UIImage())
                     .resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: 440)
                     .background(.black).clipShape(RoundedRectangle(cornerRadius: 16))
-                Text(showOriginal ? "ORIGINAL" : (lab.automaticProcessing || lab.recipe.hasAdjustments ? "EDITED PREVIEW" : "NO ADJUSTMENTS"))
+                Text(showOriginal ? "ORIGINAL" : ((lab.automaticProcessing && lab.automaticStrength > 0) || lab.recipe.hasAdjustments ? "EDITED PREVIEW" : "NO ADJUSTMENTS"))
                     .font(.caption2.monospaced().bold()).padding(8).background(.black.opacity(0.8), in: Capsule()).padding(10)
             }
             HStack {
@@ -127,12 +127,16 @@ struct PhotoLabView: View {
         AstroPanel {
             VStack(alignment: .leading, spacing: 12) {
                 eyebrow("AUTOMATIC ASTRO DEVELOPMENT")
-                Picker("Photo type", selection: $lab.intent) {
+                Picker("Photo type", selection: Binding(get: { lab.intent }, set: { lab.setIntent($0) })) {
                     ForEach(PhotoIntent.allCases) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented)
-                Toggle("Use measured astrophotography processing", isOn: $lab.automaticProcessing)
+                Toggle("Use measured astrophotography processing", isOn: Binding(get: { lab.automaticProcessing }, set: { lab.setAutomatic($0) }))
                     .font(.subheadline.bold()).accessibilityIdentifier("automaticProcessing")
+                    .disabled(lab.project?.astroPlan == nil)
                 if lab.automaticProcessing, let plan = lab.project?.astroPlan {
+                    adjustment("Automatic strength", $lab.automaticStrength, 0...1)
+                    Text("Blend the measured development with your source: 0 is unchanged, 1 is full strength. Manual adjustments apply afterward.")
+                        .font(.caption).foregroundStyle(AstroTheme.muted)
                     Text("Built from this photo: \(plan.sampledTiles) low-signal sky tiles · sky level \(plan.skyLevel, format: .number.precision(.fractionLength(4))) · fine variation \(plan.skySigma, format: .number.precision(.fractionLength(4))).")
                         .font(.caption)
                     ForEach(plan.operations, id: \.self) { Text($0).font(.caption).foregroundStyle(AstroTheme.muted) }
@@ -172,6 +176,8 @@ struct PhotoLabView: View {
                     }.padding(.top, 10)
                 }
                 Button("Reset manual adjustments") { lab.reset() }.font(.subheadline)
+                Button("Reset all edits") { lab.resetAll() }
+                    .font(.subheadline).accessibilityIdentifier("resetAllEdits")
             }
         }.disabled(lab.busy)
     }
@@ -205,6 +211,8 @@ struct PhotoLabView: View {
                 if let p = lab.project {
                     Text("\(p.width) × \(p.height) · \(p.sourceDepth)-bit source · \(p.sourceExtension.uppercased())").font(.caption.bold())
                     Text("SHA-256\n\(p.sha256)").font(.caption2.monospaced()).textSelection(.enabled)
+                    Text("Automatic strength: \(Int(lab.automaticStrength * 100))%")
+                        .font(.caption)
                     ForEach((lab.automaticProcessing ? p.astroPlan?.operations : nil) ?? ["Automatic astrophotography processing disabled"], id: \.self) { Text($0).font(.caption) }
                     ForEach(lab.recipe.bounded.operations, id: \.self) { Text($0).font(.caption) }
                     Text("Your imported bytes and recipe are saved on this phone. Deleting the app deletes local projects; keep a separate backup. Photos may supply a previously edited version—use Files when you need an exact master.")

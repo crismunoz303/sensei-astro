@@ -10,9 +10,15 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var errorMessage: String?
     @Published var selectedTab: AstroTab = .tonight
     @Published private(set) var observingCoordinate = AstroCoordinate.huntingtonPark
+    @Published private(set) var observingLocationName = "HUNTINGTON PARK"
+    @Published private(set) var locationStatus = "Default location · Huntington Park"
+    private var snapshotCoordinate: AstroCoordinate?
+    var forecastIsCurrent: Bool {
+        hasLoaded && snapshotCoordinate == observingCoordinate
+            && CloudForecast.isFresh(updatedAt: snapshot.updatedAt, now: Date())
+    }
 
     private let locationManager = CLLocationManager()
-    private var locationName = "HUNTINGTON PARK"
     private var started = false
     private var lastRefreshAttempt: Date?
 
@@ -42,7 +48,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         lastRefreshAttempt = Date()
         errorMessage = nil
         let usedCoordinate = observingCoordinate
-        let usedName = locationName
+        let usedName = observingLocationName
         let result = await AstroData.load(at: usedCoordinate, locationName: usedName)
         if usedCoordinate != observingCoordinate {
             isLoading = false
@@ -50,6 +56,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
         snapshot = result
+        snapshotCoordinate = usedCoordinate
         hasLoaded = true
         if result.plans.isEmpty {
             errorMessage = "No catalog target has a long enough window meeting the altitude and weather criteria."
@@ -73,15 +80,22 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func handleLocation(_ latest: CLLocation) {
+        guard latest.horizontalAccuracy >= 0,
+              abs(latest.timestamp.timeIntervalSinceNow) <= 5 * 60,
+              CLLocationCoordinate2DIsValid(latest.coordinate) else { return }
         observingCoordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
         let fallbackDistance = latest.distance(from: CLLocation(latitude: AstroCoordinate.huntingtonPark.latitude, longitude: AstroCoordinate.huntingtonPark.longitude))
-        locationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK" : "CURRENT LOCATION"
+        observingLocationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK AREA" : "CURRENT LOCATION"
+        locationStatus = "Phone location · approximate"
+        let requestedCoordinate = observingCoordinate
         Task {
             if fallbackDistance >= 25_000,
                let placemark = try? await CLGeocoder().reverseGeocodeLocation(latest).first {
                 let locality = placemark.locality ?? placemark.subAdministrativeArea
                 let region = placemark.administrativeArea
-                locationName = [locality, region].compactMap { $0 }.joined(separator: ", ").uppercased()
+                guard requestedCoordinate == observingCoordinate else { return }
+                let name = [locality, region].compactMap { $0 }.joined(separator: ", ").uppercased()
+                if !name.isEmpty { observingLocationName = name }
             }
             await refresh()
         }
@@ -89,7 +103,10 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor [weak self] in
-            self?.locationName = "HUNTINGTON PARK"
+            guard let self else { return }
+            self.locationStatus = self.observingCoordinate == .huntingtonPark
+                ? "Location unavailable · Huntington Park fallback"
+                : "Last known phone location"
         }
     }
 }

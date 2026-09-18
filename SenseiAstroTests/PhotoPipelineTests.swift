@@ -161,6 +161,55 @@ final class PhotoPipelineTests: XCTestCase {
         XCTAssertTrue(result.measurement.median.isFinite)
     }
 
+    func testAutomaticStrengthZeroIsNeutralAndHalfIsDistinct() async throws {
+        let engine = PhotoPipeline(root: root)
+        var p = try await engine.importData(fixture()).project
+        let full = try await engine.render(p)
+        p.automaticStrength = 0.5
+        let half = try await engine.render(p)
+        p.automaticStrength = 0
+        let zero = try await engine.render(p)
+        p.automaticProcessingDisabled = true
+        let disabled = try await engine.render(p)
+        XCTAssertEqual(zero.image.dataProvider?.data as Data?, disabled.image.dataProvider?.data as Data?)
+        XCTAssertNotEqual(half.image.dataProvider?.data as Data?, full.image.dataProvider?.data as Data?)
+        XCTAssertNotEqual(half.image.dataProvider?.data as Data?, zero.image.dataProvider?.data as Data?)
+        XCTAssertEqual(half.image.width, p.width)
+    }
+
+    func testStrengthPersistsAndIsRecordedInExport() async throws {
+        let engine = PhotoPipeline(root: root)
+        var p = try await engine.importData(fixture()).project
+        p.automaticStrength = 0.4
+        try await engine.save(p)
+        let restarted = PhotoPipeline(root: root)
+        let saved = try await restarted.projects()
+        let restored = try await restarted.open(XCTUnwrap(saved.first))
+        XCTAssertEqual(restored.project.boundedAutomaticStrength, 0.4)
+        let exported = try await restarted.export(restored.project, format: .png)
+        let audit = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: exported.reportURL)) as? [String: Any])
+        XCTAssertTrue((audit["operations"] as? [String])?.contains("Automatic development blend strength: 0.400") == true)
+        p.automaticStrength = .nan
+        XCTAssertEqual(p.boundedAutomaticStrength, 1)
+        p.automaticStrength = -1
+        XCTAssertEqual(p.boundedAutomaticStrength, 0)
+        p.automaticStrength = 2
+        XCTAssertEqual(p.boundedAutomaticStrength, 1)
+    }
+
+    func testReanalysisPreservesDisabledProcessingAndOldProjectCompatibility() async throws {
+        let engine = PhotoPipeline(root: root)
+        var p = try await engine.importData(fixture()).project
+        p.astroPlan = nil
+        p.automaticProcessingDisabled = true
+        let opened = try await engine.open(p)
+        XCTAssertEqual(opened.project.automaticProcessingDisabled, true)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(opened.project)) as? [String: Any])
+        json.removeValue(forKey: "automaticStrength")
+        let old = try JSONDecoder().decode(PhotoProject.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(old.boundedAutomaticStrength, 1)
+    }
+
     func testCorruptedOriginalStopsExport() async throws {
         let engine = PhotoPipeline(root: root)
         let p = try await engine.importData(fixture()).project

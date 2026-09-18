@@ -1,6 +1,44 @@
 import XCTest
 
 final class PhotoFlowUITests: XCTestCase {
+    func testResetAllAndUndoRestoreAutomaticDevelopment() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--photo-ui-test"]
+        app.launch()
+        XCTAssertTrue(app.buttons["compareOriginal"].waitForExistence(timeout: 30))
+        let automatic = app.switches["automaticProcessing"]
+        reveal(automatic, in: app)
+        if automatic.value as? String != "1" { automatic.tap() }
+        XCTAssertTrue(app.sliders["Automatic strength"].exists)
+        app.sliders["Automatic strength"].adjust(toNormalizedSliderPosition: 0.4)
+        reveal(app.buttons["resetAllEdits"], in: app)
+        app.buttons["resetAllEdits"].tap()
+        for _ in 0..<12 {
+            if app.buttons["Undo"].isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(app.buttons["Undo"].isHittable)
+        app.buttons["Undo"].tap()
+        for _ in 0..<12 {
+            if automatic.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertEqual(automatic.value as? String, "1")
+        attach(app, "05-automatic-strength-and-undo")
+    }
+
+    func testCloudNavigationDoesNotInventForecastWhileUnavailable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--photo-ui-test"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["Clouds"].waitForExistence(timeout: 30))
+        app.tabBars.buttons["Clouds"].tap()
+        XCTAssertTrue(app.staticTexts["NEAR NOW"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["No nearby sample"].exists)
+        XCTAssertTrue(app.staticTexts["No remaining sample"].exists)
+        attach(app, "06-cloud-unavailable-state")
+    }
     func testEditorCompareInspectExportAndRecoverProject() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -10,24 +10,17 @@ struct CloudMapView: View {
     }
 
     private var forecast: [WeatherPoint] {
-        let earliest = Date().addingTimeInterval(-30 * 60)
-        let latest = Date().addingTimeInterval(24 * 60 * 60)
-        return store.snapshot.sky.weather
-            .filter { $0.time >= earliest && $0.time <= latest }
-            .sorted { $0.time < $1.time }
+        guard store.forecastIsCurrent else { return [] }
+        return CloudForecast.points(store.snapshot.sky.weather,
+            from: Date().addingTimeInterval(-30 * 60), through: Date().addingTimeInterval(24 * 3600))
     }
 
     private var currentPoint: WeatherPoint? {
-        forecast.min { abs($0.time.timeIntervalSinceNow) < abs($1.time.timeIntervalSinceNow) }
+        CloudForecast.nearNow(forecast, now: Date())
     }
 
     private var clearestPoint: WeatherPoint? {
-        forecast.min {
-            if $0.cloudPercent == $1.cloudPercent {
-                return $0.precipitationPercent < $1.precipitationPercent
-            }
-            return $0.cloudPercent < $1.cloudPercent
-        }
+        CloudForecast.clearestTonight(forecast, sky: store.snapshot.sky, now: Date())
     }
 
     var body: some View {
@@ -36,9 +29,9 @@ struct CloudMapView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     header
-                    map
                     forecastSummary
                     hourlyForecast
+                    map
                     sourceNote
                 }
                 .padding(16)
@@ -61,10 +54,10 @@ struct CloudMapView: View {
                     .font(.title2)
                     .foregroundStyle(AstroTheme.red)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.snapshot.locationName)
+                    Text(store.observingLocationName)
                         .font(.headline.monospaced().bold())
                         .foregroundStyle(AstroTheme.text)
-                    Text("Interactive total cloud cover")
+                    Text(store.locationStatus)
                         .font(.caption)
                         .foregroundStyle(AstroTheme.muted)
                 }
@@ -104,28 +97,29 @@ struct CloudMapView: View {
 
     private var forecastSummary: some View {
         AstroPanel {
+            VStack(alignment: .leading, spacing: 8) {
             Text("LOCAL CLOUD CHECK")
                 .font(.caption.bold())
                 .foregroundStyle(AstroTheme.red)
-            if let currentPoint, let clearestPoint {
                 HStack(spacing: 10) {
                     MetricView(
-                        title: "NOW",
-                        value: "\(Int(currentPoint.cloudPercent.rounded()))%",
-                        detail: cloudLabel(currentPoint.cloudPercent)
+                        title: "NEAR NOW",
+                        value: currentPoint.map { "\(Int($0.cloudPercent.rounded()))%" } ?? "—",
+                        detail: currentPoint.map { "Forecast: \($0.time.astroTime)" } ?? "No nearby sample"
                     )
                     MetricView(
-                        title: "CLEAREST 24H",
-                        value: "\(Int(clearestPoint.cloudPercent.rounded()))%",
-                        detail: clearestPoint.time.astroTime
+                        title: "CLEAREST DARK HOUR",
+                        value: clearestPoint.map { "\(Int($0.cloudPercent.rounded()))%" } ?? "—",
+                        detail: clearestPoint.map { $0.time.astroTime } ?? "No remaining sample"
                     )
                 }
                 .padding(.top, 8)
-            } else {
-                Text("Live hourly cloud percentages are unavailable. The interactive map may still load.")
+            if !store.forecastIsCurrent || forecast.isEmpty {
+                Text("Local forecast unavailable or refreshing. Pull down to retry. The map uses its own forecast.")
                     .font(.caption)
                     .foregroundStyle(AstroTheme.muted)
                     .padding(.top, 6)
+            }
             }
         }
     }
@@ -160,13 +154,15 @@ struct CloudMapView: View {
             Text(point.time.astroTime)
                 .font(.caption2.monospaced().bold())
                 .foregroundStyle(AstroTheme.muted)
+            Text(point.time.formatted(.dateTime.month(.abbreviated).day()))
+                .font(.caption2).foregroundStyle(AstroTheme.muted)
             Image(systemName: cloudSymbol(point.cloudPercent))
                 .font(.title3)
                 .foregroundStyle(cloudColor(point.cloudPercent))
             Text("\(Int(point.cloudPercent.rounded()))%")
                 .font(.headline.monospaced().bold())
                 .foregroundStyle(AstroTheme.text)
-            Text(duringDarkness ? "DARK" : "LIGHT")
+            Text(duringDarkness ? "DARK" : "OUTSIDE NIGHT")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(duringDarkness ? AstroTheme.red : AstroTheme.muted)
         }
@@ -208,8 +204,8 @@ struct CloudMapView: View {
 
 private enum VentuskyURL {
     static func clouds(at coordinate: AstroCoordinate) -> URL {
-        let position = String(format: "%.5f;%.5f;8", coordinate.latitude, coordinate.longitude)
-        let pin = String(format: "%.5f;%.5f;dot;Sensei", coordinate.latitude, coordinate.longitude)
+        let position = String(format: "%.5f;%.5f;8", locale: Locale(identifier: "en_US_POSIX"), coordinate.latitude, coordinate.longitude)
+        let pin = String(format: "%.5f;%.5f;dot;Sensei", locale: Locale(identifier: "en_US_POSIX"), coordinate.latitude, coordinate.longitude)
         var components = URLComponents(string: "https://embed.ventusky.com/")!
         components.queryItems = [
             URLQueryItem(name: "p", value: position),

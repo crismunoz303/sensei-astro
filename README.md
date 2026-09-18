@@ -4,7 +4,25 @@ Native SwiftUI iPhone companion for a Seestar S30 Pro on a standard tripod.
 Tonight and Targets provide locally ranked capture plans. True Edit provides
 conventional photo processing while preserving the imported source bytes.
 
-## Version 1.6.0
+## Version 1.7.0
+
+True Edit now offers adjustable automatic development strength, full-state
+undo/redo (recipe, mode, processing toggle and strength), and a reversible reset
+of all edits. Strength is preserved across reopening and used consistently by
+preview, source-detail inspection and export. Older projects retain their
+existing strength. Reanalysis respects disabled automatic processing.
+
+Cloud checks reject distant samples as "near now", select the clearest remaining
+astronomically dark hour, and hide stale or previous-location point forecasts.
+The homepage links directly to Clouds and identifies target-window forecast
+times. Targets supports Favorites only, pull-to-refresh and empty results.
+
+Accuracy limits: cloud cover is a model forecast, not an observation. Map and
+local percentages are independent sources and may disagree. Moon coordinates
+and dark-time calculations remain approximate; target scores are heuristics.
+The clearest sampled hour is not a promise of a continuous clear session.
+USNO daily Moon phase/illumination refer to local noon, not a live lunar
+measurement: https://aa.usno.navy.mil/data/RS_OneDay . Times use the device zone.
 
 Clouds adds an interactive Ventusky total-cloud-cover map centered on the
 current observing location, with Huntington Park as the fallback. The same

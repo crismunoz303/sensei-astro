@@ -1,4 +1,4 @@
-# Sensei Astro Studio 1.6.0
+# Sensei Astro Studio 1.7.0
 
 Native iPhone companion for Seestar S30 Pro capture planning and conventional,
 original-preserving photo editing. Red/dark interface and Sensei's existing
@@ -25,6 +25,10 @@ Andromeda icon. The user operates the telescope in the Seestar app.
 - Source-derived highlight mask blends bright original pixels into the result.
 - Undo/redo, neutral reset, original comparison, pinch/pan inspection, and nine
   source-resolution detail regions rendered from the original image.
+- Automatic-development strength blends source-derived processing with the
+  original before manual edits; zero bypasses automatic processing. Undo/redo
+  includes the full edit state, and reset-all disables automatic processing.
+  Saved projects without a strength field keep the prior full-strength default.
 - Full-resolution sRGB PNG (8-bit) or TIFF (16-bit). Orientation is baked in;
   edited exports omit source location metadata. No crop or geometric warp.
 - Verify output dimensions and TIFF bit depth; produce JSON audit of recipe,
@@ -55,6 +59,9 @@ Andromeda icon. The user operates the telescope in the Seestar app.
 - A separate 24-hour strip displays Open-Meteo percentages from the same
   forecast already used by the planner and marks samples during astronomical
   darkness. The app labels the two sources so their values are not conflated.
+- "Near now" requires a valid sample within 30 minutes. The clearest hour is
+  restricted to remaining astronomical darkness. Point forecasts older than
+  30 minutes since fetch or from a previous location are withheld on Clouds.
 
 ## Verification
 

@@ -4,6 +4,12 @@ import Photos
 
 @MainActor
 final class PhotoLabStore: ObservableObject {
+    struct EditState: Equatable {
+        let recipe: PhotoRecipe
+        let intent: PhotoIntent
+        let automatic: Bool
+        let strength: Double
+    }
     @Published private(set) var project: PhotoProject?
     @Published private(set) var projects: [PhotoProject] = []
     @Published private(set) var original: UIImage?
@@ -13,12 +19,13 @@ final class PhotoLabStore: ObservableObject {
     @Published var recipe = PhotoRecipe.identity { didSet { if !installing && oldValue != recipe { schedulePreview() } } }
     @Published var intent = PhotoIntent.astro { didSet { if !installing && oldValue != intent { schedulePreview() } } }
     @Published var automaticProcessing = true { didSet { if !installing && oldValue != automaticProcessing { schedulePreview() } } }
+    @Published var automaticStrength = 1.0 { didSet { if !installing && oldValue != automaticStrength { schedulePreview() } } }
     @Published var format = LabExportFormat.png
     @Published private(set) var operation: String?
     @Published private(set) var rendering = false
     @Published private(set) var previewCurrent = true
-    @Published private(set) var undoStack: [PhotoRecipe] = []
-    @Published private(set) var redoStack: [PhotoRecipe] = []
+    @Published private(set) var undoStack: [EditState] = []
+    @Published private(set) var redoStack: [EditState] = []
     @Published var error: String?
     @Published var message: String?
     @Published private(set) var exportResult: LabExport?
@@ -94,6 +101,7 @@ final class PhotoLabStore: ObservableObject {
         before = loaded.measurement; after = loaded.measurement
         intent = loaded.project.intent
         automaticProcessing = loaded.project.automaticProcessingDisabled != true && loaded.project.astroPlan != nil
+        automaticStrength = loaded.project.boundedAutomaticStrength
         message = nil
         recipe = loaded.project.recipe.bounded
         if automaticStart {
@@ -108,19 +116,40 @@ final class PhotoLabStore: ObservableObject {
     }
 
     func rememberAdjustment() {
-        if undoStack.last != recipe { undoStack.append(recipe) }
+        if undoStack.last != editState { undoStack.append(editState) }
         if undoStack.count > 40 { undoStack.removeFirst() }
         redoStack = []
     }
     func applyAdvice() { guard let advice else { return }; rememberAdjustment(); recipe = advice.recipe }
     func reset() { rememberAdjustment(); recipe = .identity }
-    func undo() { guard let value = undoStack.popLast() else { return }; redoStack.append(recipe); recipe = value }
-    func redo() { guard let value = redoStack.popLast() else { return }; undoStack.append(recipe); recipe = value }
+    private var editState: EditState {
+        EditState(recipe: recipe, intent: intent, automatic: automaticProcessing, strength: automaticStrength)
+    }
+    private func installEdit(_ value: EditState) {
+        installing = true
+        recipe = value.recipe; intent = value.intent
+        automaticProcessing = value.automatic; automaticStrength = value.strength
+        installing = false
+        schedulePreview()
+    }
+    func setAutomatic(_ enabled: Bool) { rememberAdjustment(); automaticProcessing = enabled }
+    func setIntent(_ value: PhotoIntent) {
+        rememberAdjustment()
+        installEdit(EditState(recipe: recipe, intent: value,
+            automatic: value == .astro && project?.astroPlan != nil, strength: automaticStrength))
+    }
+    func resetAll() {
+        rememberAdjustment()
+        installEdit(EditState(recipe: .identity, intent: intent, automatic: false, strength: 1))
+    }
+    func undo() { guard let value = undoStack.popLast() else { return }; redoStack.append(editState); installEdit(value) }
+    func redo() { guard let value = redoStack.popLast() else { return }; undoStack.append(editState); installEdit(value) }
 
     private func snapshot() -> PhotoProject? {
         guard var p = project else { return nil }
         p.recipe = recipe.bounded; p.intent = intent; p.updated = Date()
         p.automaticProcessingDisabled = !automaticProcessing
+        p.automaticStrength = automaticStrength
         return p
     }
 

@@ -22,8 +22,11 @@ struct TonightView: View {
                             .background(AstroTheme.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                     }
                     conditions
+                    cloudShortcut
                     if let best { featuredTarget(best) }
                     targetList
+                    Text("Planning estimates, not guarantees. Clouds are forecasts. USNO Moon phase/illumination describe local noon, not the live Moon; offline lunar and dark-time calculations are approximate. Times use this iPhone’s time zone. Confirm the sky and framing in Seestar before capture.")
+                        .font(.caption2).foregroundStyle(AstroTheme.muted)
                     updatedFooter
                 }
                 .padding()
@@ -69,9 +72,25 @@ struct TonightView: View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             MetricView(title: "DARK SKY", value: "\(snapshot.sky.start.astroTime)-\(snapshot.sky.end.astroTime)", detail: snapshot.sky.darknessLabel.capitalized)
             MetricView(title: "MOON", value: "\(Int(snapshot.sky.moonIllumination * 100))%", detail: snapshot.sky.moonPhase)
-            MetricView(title: "FORECAST", value: best?.weather.map { "\(Int($0.cloudPercent))% CLOUD" } ?? "OFFLINE", detail: best?.weather.map { "\(Int($0.windMPH)) MPH WIND" } ?? "Check sky")
+            MetricView(title: "TARGET-WINDOW FORECAST", value: best?.weather.map { "\(Int($0.cloudPercent))% CLOUD" } ?? "UNAVAILABLE", detail: best.map { "Near \($0.bestTime.astroTime)" } ?? "No target-window forecast")
             MetricView(title: "SUNSET", value: snapshot.sky.sunset, detail: "Moonrise \(snapshot.sky.moonrise)")
         }
+    }
+
+    private var cloudShortcut: some View {
+        Button { store.selectedTab = .clouds } label: {
+            AstroPanel {
+                HStack {
+                    Image(systemName: "cloud.moon.fill").font(.title2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Check clouds before setup").font(.subheadline.bold())
+                        Text("Hourly forecast + interactive map").font(.caption).foregroundStyle(AstroTheme.muted)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }.foregroundStyle(AstroTheme.red)
+            }
+        }.buttonStyle(.plain)
     }
 
     private var targetList: some View {
@@ -142,6 +161,9 @@ struct TonightView: View {
     }
 
     private var verdict: (title: String, detail: String, icon: String, color: Color) {
+        if !store.forecastIsCurrent {
+            return ("REFRESH CONDITIONS", "Forecast is stale or belongs to the previous location. Pull down to refresh.", "arrow.clockwise", AstroTheme.amber)
+        }
         if snapshot.sky.weather.isEmpty || (best != nil && best?.weather == nil) {
             return ("CHECK CONDITIONS", "Weather unavailable. Target rankings are provisional.", "exclamationmark.triangle.fill", AstroTheme.amber)
         }

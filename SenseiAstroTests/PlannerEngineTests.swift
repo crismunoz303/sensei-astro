@@ -96,6 +96,20 @@ final class PlannerEngineTests: XCTestCase {
         XCTAssertLessThanOrEqual(plan.visibleMinutes, 60)
     }
 
+    func testIsolatedExcellentSampleDoesNotHideLongerUsableWindow() throws {
+        let start = date("2026-09-12T03:00:00Z")
+        let weather = (0...8).map { i in
+            WeatherPoint(time: start.addingTimeInterval(Double(i) * 900),
+                cloudPercent: i == 0 ? 0 : (i == 1 ? 100 : 75),
+                precipitationPercent: i == 1 ? 100 : 0,
+                humidityPercent: 50, dewPointF: 40, temperatureF: 60, windMPH: 3, gustMPH: 5)
+        }
+        let plan = try XCTUnwrap(PlannerEngine.rank([circumpolarTarget], coordinate: coordinate,
+            sky: sky(start: start, end: start.addingTimeInterval(7200), weather: weather), now: start).first)
+        XCTAssertGreaterThanOrEqual(plan.start, start.addingTimeInterval(1800))
+        XCTAssertGreaterThanOrEqual(plan.sessionMinutes, 15)
+    }
+
     private var circumpolarTarget: AstroTarget {
         AstroTarget(id: "TEST", name: "Test Target", rightAscensionHours: 2.5, declinationDegrees: 89, type: "Test", filterEnabled: false, recommendedMinutes: 120, lens: "Tele 1x", framing: "Single frame", note: "Test only")
     }

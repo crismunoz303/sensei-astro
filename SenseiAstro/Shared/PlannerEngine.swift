@@ -26,7 +26,11 @@ enum PlannerEngine {
             let usable = evaluated.map { sample in
                 sample.altitude >= 25 && !(sample.weather.map { $0.cloudPercent > 85 || $0.precipitationPercent > 60 || $0.gustMPH > 28 } ?? false)
             }
-            let segments = continuousSegments(evaluated, usable: usable)
+            // A very short high-scoring fragment must not hide a usable session.
+            let segments = continuousSegments(evaluated, usable: usable).filter {
+                guard let first = $0.first, let last = $0.last else { return false }
+                return last.time.timeIntervalSince(first.time) >= 15 * 60
+            }
             guard let window = segments.max(by: { segmentValue($0) < segmentValue($1) }),
                   let first = window.first, let last = window.last,
                   let best = window.dropLast().max(by: { $0.score < $1.score }) else { return nil }
