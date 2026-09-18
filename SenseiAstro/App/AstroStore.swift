@@ -11,21 +11,36 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var selectedTab: AstroTab = .tonight
     @Published private(set) var observingCoordinate = AstroCoordinate.huntingtonPark
     @Published private(set) var observingLocationName = "HUNTINGTON PARK"
-    @Published private(set) var locationStatus = "Default location · Huntington Park"
+    @Published private(set) var locationStatus = "Huntington Park fallback · waiting for phone location"
+    @Published private(set) var isLocating = false
     private var snapshotCoordinate: AstroCoordinate?
+    var hasSnapshotForLocation: Bool { hasLoaded && snapshotCoordinate == observingCoordinate }
     var forecastIsCurrent: Bool {
-        hasLoaded && snapshotCoordinate == observingCoordinate
+        !isLocating && hasSnapshotForLocation
             && CloudForecast.isFresh(updatedAt: snapshot.updatedAt, now: Date())
     }
 
     private let locationManager = CLLocationManager()
     private var started = false
     private var lastRefreshAttempt: Date?
+    private var foreground = false
+    private var acceptedLocation: CLLocation?
+    private var locationTimeout: Task<Void, Never>?
+    private let geocoder = CLGeocoder()
+    private var isUITest: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("--photo-ui-test")
+            || ProcessInfo.processInfo.arguments.contains("--cloud-ui-test")
+        #else
+        return false
+        #endif
+    }
 
     override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = 500
     }
 
     func start() {
@@ -35,9 +50,59 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         if ProcessInfo.processInfo.arguments.contains("--photo-ui-test") { selectedTab = .lab; return }
         if ProcessInfo.processInfo.arguments.contains("--cloud-ui-test") { selectedTab = .clouds; return }
         #endif
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.requestLocation()
-        Task { await refresh() }
+        enterForeground()
+    }
+
+    func enterForeground() {
+        guard !isUITest else { return }
+        foreground = true
+        updateLocationAuthorization()
+        Task { await refreshIfStale(maxAge: 5 * 60) }
+    }
+
+    func leaveForeground() {
+        foreground = false
+        locationManager.stopUpdatingLocation()
+        locationTimeout?.cancel()
+        isLocating = false
+        if acceptedLocation != nil { locationStatus = "Last known phone location" }
+    }
+
+    private func updateLocationAuthorization() {
+        guard foreground, !isUITest else { return }
+        switch locationManager.authorizationStatus {
+        case .notDetermined:
+            locationStatus = "Huntington Park fallback · allow location to use your sky"
+            locationManager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse:
+            isLocating = true
+            locationStatus = acceptedLocation == nil
+                ? "Finding phone location · Huntington Park fallback"
+                : "Updating phone location · showing last known position"
+            locationManager.startUpdatingLocation()
+            locationTimeout?.cancel()
+            locationTimeout = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                self?.locationUnavailable()
+            }
+        case .denied, .restricted:
+            locationManager.stopUpdatingLocation()
+            locationUnavailable(reason: "Location access off")
+        @unknown default:
+            locationUnavailable()
+        }
+    }
+
+    private func locationUnavailable(reason: String = "Location unavailable") {
+        locationTimeout?.cancel()
+        isLocating = false
+        locationStatus = acceptedLocation == nil
+            ? "\(reason) · Huntington Park fallback"
+            : "\(reason) · last known phone location"
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor [weak self] in self?.updateLocationAuthorization() }
     }
 
     func refresh() async {
@@ -67,7 +132,8 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func refreshIfStale(maxAge: TimeInterval = 15 * 60) async {
-        guard let lastRefreshAttempt else {
+        guard foreground else { return }
+        guard hasSnapshotForLocation, let lastRefreshAttempt else {
             await refresh()
             return
         }
@@ -82,33 +148,43 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func handleLocation(_ latest: CLLocation) {
-        guard latest.horizontalAccuracy >= 0,
-              abs(latest.timestamp.timeIntervalSinceNow) <= 5 * 60,
+        guard foreground, !isUITest,
+              LocationPolicy.accepts(accuracy: latest.horizontalAccuracy, timestamp: latest.timestamp, now: Date()),
               CLLocationCoordinate2DIsValid(latest.coordinate) else { return }
+        locationTimeout?.cancel()
+        isLocating = false
+        locationStatus = locationManager.accuracyAuthorization == .reducedAccuracy
+            ? "Phone location · approximate"
+            : "Phone location · updated \(latest.timestamp.astroTime)"
+        // Keep map and calculations on one coordinate; ignore small GPS drift.
+        if let previous = acceptedLocation,
+           !LocationPolicy.shouldUpdate(distance: latest.distance(from: previous),
+                oldAccuracy: previous.horizontalAccuracy, newAccuracy: latest.horizontalAccuracy) {
+            Task { await refreshIfStale(maxAge: 5 * 60) }
+            return
+        }
+        acceptedLocation = latest
         observingCoordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
-        let fallbackDistance = latest.distance(from: CLLocation(latitude: AstroCoordinate.huntingtonPark.latitude, longitude: AstroCoordinate.huntingtonPark.longitude))
-        observingLocationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK AREA" : "CURRENT LOCATION"
-        locationStatus = "Phone location · approximate"
+        observingLocationName = "CURRENT LOCATION"
         let requestedCoordinate = observingCoordinate
+        Task { await refresh() }
+        geocoder.cancelGeocode()
         Task {
-            if fallbackDistance >= 25_000,
-               let placemark = try? await CLGeocoder().reverseGeocodeLocation(latest).first {
+            if let placemark = try? await geocoder.reverseGeocodeLocation(latest).first {
                 let locality = placemark.locality ?? placemark.subAdministrativeArea
                 let region = placemark.administrativeArea
                 guard requestedCoordinate == observingCoordinate else { return }
                 let name = [locality, region].compactMap { $0 }.joined(separator: ", ").uppercased()
                 if !name.isEmpty { observingLocationName = name }
             }
-            await refresh()
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.locationStatus = self.observingCoordinate == .huntingtonPark
-                ? "Location unavailable · Huntington Park fallback"
-                : "Last known phone location"
+            guard self.foreground, !self.isUITest else { return }
+            self.locationUnavailable()
         }
     }
 }

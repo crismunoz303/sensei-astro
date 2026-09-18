@@ -37,6 +37,12 @@ final class PhotoFlowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["NEAR NOW"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["No nearby sample"].exists)
         XCTAssertTrue(app.staticTexts["No remaining sample"].exists)
+        XCTAssertTrue(app.staticTexts["Huntington Park fallback · waiting for phone location"].firstMatch.exists)
+        app.tabBars.buttons["Targets"].tap()
+        XCTAssertTrue(app.staticTexts["Huntington Park fallback · waiting for phone location"].firstMatch.exists)
+        app.tabBars.buttons["Tonight"].tap()
+        XCTAssertTrue(app.staticTexts["Huntington Park fallback · waiting for phone location"].firstMatch.exists)
+        app.tabBars.buttons["Clouds"].tap()
         attach(app, "06-cloud-unavailable-state")
     }
     func testEditorCompareInspectExportAndRecoverProject() throws {

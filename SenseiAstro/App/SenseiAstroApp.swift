@@ -15,8 +15,8 @@ struct SenseiAstroApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await store.refreshIfStale(maxAge: 5 * 60) }
+            if phase == .active { store.enterForeground() }
+            else { store.leaveForeground() }
         }
     }
 }

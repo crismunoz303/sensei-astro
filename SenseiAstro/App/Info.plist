@@ -48,7 +48,7 @@
     </dict>
   </array>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Sensei Astro uses your location to rank targets and calculate tonight's best capture windows.</string>
+  <string>Sensei Astro uses your location while open for targets, Sun and Moon times, weather, and cloud maps. Coordinates are sent to forecast and map providers to show your local sky.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>Sensei Astro saves finished copies while always preserving your original photograph.</string>
   <key>LSRequiresIPhoneOS</key>

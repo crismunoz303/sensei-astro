@@ -60,7 +60,7 @@ struct TonightView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(verdict.title).font(.system(size: 26, weight: .black, design: .monospaced)).foregroundStyle(verdict.color)
                     Text(verdict.detail).font(.subheadline).foregroundStyle(AstroTheme.muted)
-                    Text(snapshot.locationName).font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
+                    Text(store.observingLocationName).font(.caption.bold().monospaced()).foregroundStyle(AstroTheme.red)
                 }
                 Spacer()
                 Image(systemName: verdict.icon).font(.system(size: 32)).foregroundStyle(verdict.color)
