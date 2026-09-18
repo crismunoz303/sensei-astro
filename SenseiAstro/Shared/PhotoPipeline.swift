@@ -481,10 +481,11 @@ actor PhotoPipeline {
         let bw = CIVector(x: -0.2126, y: -0.7152, z: 0.9278, w: 0)
         let luma = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
         let alpha = CIVector(x: 0, y: 0, z: 0, w: 1)
+        let transparent = CIVector(x: 0, y: 0, z: 0, w: 0)
         let center = CIVector(x: 0.5, y: 0.5, z: 0.5, w: 0)
         guard let chroma = CIFilter(name: "CIColorMatrix", parameters: [
                 kCIInputImageKey: image, "inputRVector": rw, "inputGVector": gw,
-                "inputBVector": bw, "inputAVector": alpha,
+                "inputBVector": bw, "inputAVector": transparent,
                 "inputBiasVector": center])?.outputImage,
               let smooth = CIFilter(name: "CIGaussianBlur", parameters: [
                 kCIInputImageKey: chroma, kCIInputRadiusKey: min(1.25, max(0.35, radius))])?.outputImage,

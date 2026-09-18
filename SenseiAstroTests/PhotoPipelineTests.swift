@@ -304,7 +304,15 @@ final class PhotoPipelineTests: XCTestCase {
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
         let plan = try XCTUnwrap(AstroAutoPlan.analyze(rgba: pixels, width: width, height: height))
         let rendered = try await PhotoPipeline(root: root).renderImage(CIImage(cgImage: cg), recipe: .identity, autoPlan: plan)
-        let output = [UInt8](rendered.dataProvider!.data! as Data)
+        var output = [UInt8](repeating: 0, count: width*height*4)
+        let drew = output.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width*4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+            context.draw(rendered, in: CGRect(x: 0, y: 0, width: width, height: height)); return true
+        }
+        XCTAssertTrue(drew)
         let before = try XCTUnwrap(PhotoMeasurement.measure(rgba: pixels, width: width, height: height))
         let after = try XCTUnwrap(PhotoMeasurement.measure(rgba: output, width: width, height: height))
         XCTAssertLessThanOrEqual(after.clippedHighlights, before.clippedHighlights + 0.001)
