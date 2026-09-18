@@ -135,7 +135,7 @@ struct PhotoLabView: View {
                     .disabled(lab.project?.astroPlan == nil)
                 if lab.automaticProcessing, let plan = lab.project?.astroPlan {
                     adjustment("Automatic strength", $lab.automaticStrength, 0...1)
-                    Text("Blend the measured development with your source: 0 is unchanged, 1 is full strength. Manual adjustments apply afterward.")
+                    Text("Blend the measured development with your source: 0 is unchanged, 1 is full strength. It adapts to galaxies, nebulae, clusters, and wide-field star photos; manual adjustments apply afterward.")
                         .font(.caption).foregroundStyle(AstroTheme.muted)
                     Text("Built from this photo: \(plan.sampledTiles) low-signal sky tiles · sky level \(plan.skyLevel, format: .number.precision(.fractionLength(4))) · fine variation \(plan.skySigma, format: .number.precision(.fractionLength(4))).")
                         .font(.caption)

@@ -22,10 +22,14 @@ final class PhotoAnalysisTests: XCTestCase {
         XCTAssertGreaterThan(plan.whitePoint, plan.blackPoint)
         XCTAssertTrue((0.68...0.96).contains(plan.gamma))
         XCTAssertGreaterThanOrEqual(plan.sampledTiles, 20)
-        XCTAssertEqual(plan.planVersion, 2)
-        XCTAssertTrue((0.48...1.12).contains(try XCTUnwrap(plan.displayGain)))
+        XCTAssertEqual(plan.planVersion, 3)
+        XCTAssertTrue((0.42...1.08).contains(try XCTUnwrap(plan.displayGain)))
+        XCTAssertTrue((5...48).contains(try XCTUnwrap(plan.asinhStretch)))
+        XCTAssertTrue((0.48...0.78).contains(try XCTUnwrap(plan.highlightProtectionPoint)))
+        XCTAssertTrue((0.008...0.055).contains(try XCTUnwrap(plan.chromaNoiseLevel)))
         XCTAssertLessThanOrEqual(plan.blackPoint, max(0, plan.skyLevel - max(2.4 * plan.skySigma, 2.0 / 255.0)) + 0.000_001)
         XCTAssertTrue(plan.operations.joined().contains("cubic background"))
+        XCTAssertTrue(plan.operations.joined().contains("Luminance-linked asinh"))
     }
     func testBlackSkyDoesNotTriggerAutomaticExposure() throws {
         let m = try XCTUnwrap(PhotoMeasurement.measure(rgba: Array(repeating: [UInt8(0),0,0,255], count: 64).flatMap { $0 }, width: 8, height: 8))
@@ -61,6 +65,27 @@ final class PhotoAnalysisTests: XCTestCase {
         r.exposure = .infinity; r.saturation = .nan; r.sharpen = 900; r.denoise = -20
         XCTAssertEqual(r.bounded.exposure, 0); XCTAssertEqual(r.bounded.saturation, 1)
         XCTAssertEqual(r.bounded.sharpen, 0.4); XCTAssertEqual(r.bounded.denoise, 0)
+    }
+
+    func testAdaptivePlanHandlesExtendedNebulaAndDenseStarScenes() throws {
+        let width = 144, height = 96
+        for extended in [false, true] {
+            var rgba = [UInt8](repeating: 255, count: width * height * 4)
+            for y in 0..<height { for x in 0..<width {
+                let i = (y*width+x)*4
+                let dx = Double(x-width/2), dy = Double(y-height/2)
+                let glow = extended ? Int(70 * exp(-(dx*dx/1500 + dy*dy/500))) : 0
+                let star = !extended && (x*23+y*41)%733 == 0 ? 210 : 0
+                rgba[i] = UInt8(min(250, 13 + glow + star))
+                rgba[i+1] = UInt8(min(250, 15 + glow/2 + star))
+                rgba[i+2] = UInt8(min(250, 20 + glow/3 + star))
+            } }
+            let plan = try XCTUnwrap(AstroAutoPlan.analyze(rgba: rgba, width: width, height: height))
+            XCTAssertEqual(plan.planVersion, 3)
+            XCTAssertNotNil(plan.asinhStretch)
+            XCTAssertNotNil(plan.highlightProtectionPoint)
+            XCTAssertNotNil(plan.chromaNoiseLevel)
+        }
     }
 }
 
@@ -206,8 +231,15 @@ final class PhotoPipelineTests: XCTestCase {
         XCTAssertEqual(opened.project.automaticProcessingDisabled, true)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(opened.project)) as? [String: Any])
         json.removeValue(forKey: "automaticStrength")
+        if var oldPlan = json["astroPlan"] as? [String: Any] {
+            oldPlan.removeValue(forKey: "asinhStretch")
+            oldPlan.removeValue(forKey: "highlightProtectionPoint")
+            oldPlan.removeValue(forKey: "chromaNoiseLevel")
+            json["astroPlan"] = oldPlan
+        }
         let old = try JSONDecoder().decode(PhotoProject.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertEqual(old.boundedAutomaticStrength, 1)
+        XCTAssertNil(old.astroPlan?.asinhStretch)
     }
 
     func testCorruptedOriginalStopsExport() async throws {
@@ -253,6 +285,30 @@ final class PhotoPipelineTests: XCTestCase {
         }
         XCTAssertLessThan(abs(brightness(protected)-brightness(baseline)), 3)
         XCTAssertGreaterThan(brightness(protected)-brightness(unprotected), 30)
+    }
+
+    func testAutomaticDevelopmentDoesNotAddBrightSourceClipping() async throws {
+        let width = 96, height = 64
+        var pixels = [UInt8](repeating: 255, count: width*height*4)
+        for y in 0..<height { for x in 0..<width {
+            let i = (y*width+x)*4
+            let dx = Double(x-width/2), dy = Double(y-height/2)
+            let glow = Int(100 * exp(-(dx*dx+dy*dy)/260))
+            pixels[i] = UInt8(min(250, 11+glow)); pixels[i+1] = UInt8(min(250, 14+glow)); pixels[i+2] = UInt8(min(250, 19+glow/2))
+            if abs(x-width/2) <= 1 && abs(y-height/2) <= 1 { pixels[i] = 250; pixels[i+1] = 250; pixels[i+2] = 250 }
+        } }
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(pixels) as CFData))
+        let cg = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8,
+            bitsPerPixel: 32, bytesPerRow: width*4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let plan = try XCTUnwrap(AstroAutoPlan.analyze(rgba: pixels, width: width, height: height))
+        let rendered = try await PhotoPipeline(root: root).renderImage(CIImage(cgImage: cg), recipe: .identity, autoPlan: plan)
+        let output = [UInt8](rendered.dataProvider!.data! as Data)
+        let before = try XCTUnwrap(PhotoMeasurement.measure(rgba: pixels, width: width, height: height))
+        let after = try XCTUnwrap(PhotoMeasurement.measure(rgba: output, width: width, height: height))
+        XCTAssertLessThanOrEqual(after.clippedHighlights, before.clippedHighlights + 0.001)
+        XCTAssertGreaterThan(after.median, before.median)
     }
 
     func testAllEXIFOrientationsPreserveExpectedGeometry() async throws {

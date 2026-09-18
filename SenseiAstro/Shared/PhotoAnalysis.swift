@@ -129,18 +129,28 @@ struct AstroAutoPlan: Codable, Equatable {
     let sampledTiles: Int
     let displayGain: Double?
     let planVersion: Int?
+    /// Version 3 uses a luminance-linked asinh stretch so RGB ratios survive
+    /// better than independent per-channel gamma, especially around stars.
+    let asinhStretch: Double?
+    let highlightProtectionPoint: Double?
+    let chromaNoiseLevel: Double?
 
     var operations: [String] {
         let gainText = channelGains.map { String(format: "%.3f", $0) }.joined(separator: ", ")
-        return [
+        var result = [
             "Sigma-clipped cubic background model from \(sampledTiles) sky tiles",
             "Per-channel sky neutralization; gains \(gainText)",
             String(format: "Measured black/white normalization: %.4f / %.4f", blackPoint, whitePoint),
-            String(format: "Controlled nonlinear stretch: gamma %.3f, display gain %.3f", gamma, displayGain ?? 1),
+            asinhStretch.map { String(format: "Luminance-linked asinh stretch: %.2f with highlight protection from %.3f", $0, highlightProtectionPoint ?? 0.68) }
+                ?? String(format: "Controlled nonlinear stretch: gamma %.3f, display gain %.3f", gamma, displayGain ?? 1),
             String(format: "Background-masked conventional noise reduction: %.4f", noiseLevel),
             String(format: "Star-protected local contrast: %.3f", localContrast),
             String(format: "Highlight-safe color enhancement: %.3f", saturation),
         ]
+        if let chromaNoiseLevel {
+            result.insert(String(format: "Measured background chroma-noise reduction: %.4f", chromaNoiseLevel), at: 5)
+        }
+        return result
     }
 
     static func analyze(rgba: [UInt8], width: Int, height: Int) -> AstroAutoPlan? {
@@ -196,6 +206,7 @@ struct AstroAutoPlan: Codable, Equatable {
         let neutral = percentile(reference.sorted(), 0.5)
         let gains = reference.map { min(1.28, max(0.78, neutral / max($0, 1.0 / 255))) }
         var luminance: [Double] = []
+        var chromaSamples: [(luma: Double, chroma: Double)] = []
         luminance.reserveCapacity(min(width * height, 300_000))
         let step = max(1, Int(sqrt(Double(width * height) / 250_000)))
         for py in stride(from: 0, to: height, by: step) {
@@ -208,7 +219,9 @@ struct AstroAutoPlan: Codable, Equatable {
                     let raw = Double(rgba[i + channel]) / 255
                     c[channel] = max(0, (raw - evaluate(coefficients[channel], x, y) + reference[channel]) * gains[channel])
                 }
-                luminance.append(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+                let luma = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+                luminance.append(luma)
+                chromaSamples.append((luma, (abs(c[0] - c[1]) + abs(c[2] - c[1])) / 2))
             }
         }
         guard luminance.count > 100 else { return nil }
@@ -225,15 +238,25 @@ struct AstroAutoPlan: Codable, Equatable {
         let headroom = max(0, 1 - percentile(sorted, 0.999))
         let gamma = min(0.90, max(0.76, 0.83 - min(0.05, max(0, (0.11 - sky) * 0.32))))
         let normalizedSky = max(0.0001, min(1, (sky-black)/(white-black)))
-        let predictedSky = pow(normalizedSky, gamma)
-        let displayGain = min(1.12, max(0.48, 0.062 / predictedSky))
+        let skyChroma = chromaSamples.sorted { $0.luma < $1.luma }
+            .prefix(max(50, Int(Double(chromaSamples.count) * 0.58))).map(\.chroma)
+        let chromaMedian = percentile(skyChroma.sorted(), 0.5)
+        let chromaSigma = 1.4826 * percentile(skyChroma.map { abs($0 - chromaMedian) }.sorted(), 0.5)
+        // A moderate linked stretch reveals faint signal without independently
+        // stretching channels. Its measured output gain keeps sky brightness sane.
+        let asinhStrength = min(48.0, max(5.0, 0.55 / max(normalizedSky, 0.012)))
+        let asinhSky = asinh(asinhStrength * normalizedSky) / asinh(asinhStrength)
+        let linkedGain = min(1.08, max(0.42, 0.065 / max(asinhSky, 0.0001)))
+        let highlightProtection = min(0.78, max(0.48, percentile(sorted, 0.99) * 0.82))
         return AstroAutoPlan(backgroundCoefficients: coefficients, backgroundReference: reference,
             channelGains: gains, blackPoint: black, whitePoint: white, gamma: gamma,
             noiseLevel: min(0.04, max(0.01, sigma * 0.9)),
             localContrast: headroom < 0.02 ? 0.18 : 0.30,
             saturation: headroom < 0.02 ? 1.14 : 1.28,
             skyLevel: sky, skySigma: sigma, sampledTiles: selected.count,
-            displayGain: displayGain, planVersion: 2)
+            displayGain: linkedGain, planVersion: 3,
+            asinhStretch: asinhStrength, highlightProtectionPoint: highlightProtection,
+            chromaNoiseLevel: min(0.055, max(0.008, chromaSigma * 1.35)))
     }
 
     private static func evaluate(_ c: [Double], _ x: Double, _ y: Double) -> Double {

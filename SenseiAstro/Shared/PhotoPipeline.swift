@@ -78,7 +78,7 @@ actor PhotoPipeline {
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     private var cachedPreview: (UUID, CGImage)?
     private let manager = FileManager.default
-    static let engineVersion = "astro-develop-1.7.0"
+    static let engineVersion = "astro-develop-1.8.0"
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -141,7 +141,7 @@ actor PhotoPipeline {
         let preview = try thumbnail(source, maxPixel: 1400)
         let analysis = try analyze(preview)
         var upgraded = project
-        if upgraded.astroPlan?.planVersion != 2 ||
+        if upgraded.astroPlan?.planVersion != 3 ||
             upgraded.astroPlan?.backgroundCoefficients.allSatisfy({ $0.count == 10 }) != true {
             upgraded.astroPlan = analysis.plan
             // Reanalysis must not undo the user's choice to disable processing.
@@ -380,8 +380,8 @@ actor PhotoPipeline {
            let mask = intensityMask(result, low: 0.12, high: 0.42, inverted: true),
            let blended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: denoised,
                 kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
-            // The second pass contributes only half strength, reducing chroma
-            // mottling without turning faint structures into waxy patches.
+            // The second pass contributes only half strength, reducing
+            // low-signal mottling without turning faint structures waxy.
             if let halfMask = scaledMask(mask, amount: 0.5),
                let twiceBlended = CIFilter(name: "CIBlendWithMask", parameters: [kCIInputImageKey: secondPass,
                     kCIInputBackgroundImageKey: blended, kCIInputMaskImageKey: halfMask])?.outputImage {
@@ -391,13 +391,34 @@ actor PhotoPipeline {
             }
         }
 
-        guard let stretched = CIFilter(name: "CIGammaAdjust", parameters: [kCIInputImageKey: result,
-            "inputPower": min(0.96, max(0.68, plan.gamma))])?.outputImage else {
-            throw LabError.invalid("Nonlinear signal stretch could not be rendered.")
+        // Professional astro workflows treat luminance and chroma noise
+        // separately. This pass is limited to measured low-signal background;
+        // the existing signal mask prevents color detail from being smeared.
+        if let chroma = plan.chromaNoiseLevel, chroma > 0,
+           let reduced = chromaDenoise(result,
+                radius: 0.45 + min(1, chroma / 0.055) * 0.80),
+           let skyMask = intensityMask(result, low: 0.10, high: 0.34, inverted: true),
+           let mask = scaledMask(skyMask, amount: 0.82),
+           let blended = CIFilter(name: "CIBlendWithMask", parameters: [
+                kCIInputImageKey: reduced, kCIInputBackgroundImageKey: result,
+                kCIInputMaskImageKey: mask])?.outputImage {
+            result = blended.cropped(to: source.extent)
         }
-        result = stretched.cropped(to: source.extent)
 
-        if let gain = plan.displayGain, gain.isFinite, gain != 1,
+        if let amount = plan.asinhStretch, amount.isFinite, amount > 0,
+           let linked = luminanceStretch(result, amount: amount,
+                gain: plan.displayGain ?? 1,
+                highlightProtection: plan.highlightProtectionPoint ?? 0.68) {
+            result = linked.cropped(to: source.extent)
+        } else {
+            guard let stretched = CIFilter(name: "CIGammaAdjust", parameters: [kCIInputImageKey: result,
+                "inputPower": min(0.96, max(0.68, plan.gamma))])?.outputImage else {
+                throw LabError.invalid("Nonlinear signal stretch could not be rendered.")
+            }
+            result = stretched.cropped(to: source.extent)
+        }
+
+        if plan.asinhStretch == nil, let gain = plan.displayGain, gain.isFinite, gain != 1,
            let balanced = CIFilter(name: "CIColorMatrix", parameters: [kCIInputImageKey: result,
                 "inputRVector": CIVector(x: min(1.12, max(0.48, gain)), y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: min(1.12, max(0.48, gain)), z: 0, w: 0),
@@ -438,7 +459,77 @@ actor PhotoPipeline {
             kCIInputBackgroundImageKey: result, kCIInputMaskImageKey: mask])?.outputImage {
             result = blended.cropped(to: source.extent)
         }
+
+        // Exact bright source pixels are the safest available reference for
+        // stars and luminous cores. Blend only their brightest range back so
+        // the automatic stretch cannot create additional clipping or star bloat.
+        if let bright = intensityMask(source, low: 0.78, high: 0.98, inverted: false),
+           let protected = CIFilter(name: "CIBlendWithMask", parameters: [
+                kCIInputImageKey: source, kCIInputBackgroundImageKey: result,
+                kCIInputMaskImageKey: bright])?.outputImage {
+            result = protected.cropped(to: source.extent)
+        }
         return result
+    }
+
+    /// Smooth only R-Y, G-Y and B-Y while retaining the original luminance.
+    /// This suppresses colored background speckle without blurring luminance
+    /// detail such as star profiles and fine nebula or galaxy structure.
+    private func chromaDenoise(_ image: CIImage, radius: Double) -> CIImage? {
+        let rw = CIVector(x: 0.7874, y: -0.7152, z: -0.0722, w: 0)
+        let gw = CIVector(x: -0.2126, y: 0.2848, z: -0.0722, w: 0)
+        let bw = CIVector(x: -0.2126, y: -0.7152, z: 0.9278, w: 0)
+        let luma = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+        let alpha = CIVector(x: 0, y: 0, z: 0, w: 1)
+        let center = CIVector(x: 0.5, y: 0.5, z: 0.5, w: 0)
+        guard let chroma = CIFilter(name: "CIColorMatrix", parameters: [
+                kCIInputImageKey: image, "inputRVector": rw, "inputGVector": gw,
+                "inputBVector": bw, "inputAVector": alpha,
+                "inputBiasVector": center])?.outputImage,
+              let smooth = CIFilter(name: "CIGaussianBlur", parameters: [
+                kCIInputImageKey: chroma, kCIInputRadiusKey: min(1.25, max(0.35, radius))])?.outputImage,
+              let luminance = CIFilter(name: "CIColorMatrix", parameters: [
+                kCIInputImageKey: image, "inputRVector": luma, "inputGVector": luma,
+                "inputBVector": luma, "inputAVector": alpha])?.outputImage,
+              let combined = CIFilter(name: "CIAdditionCompositing", parameters: [
+                kCIInputImageKey: smooth, kCIInputBackgroundImageKey: luminance])?.outputImage,
+              let restored = CIFilter(name: "CIColorMatrix", parameters: [
+                kCIInputImageKey: combined,
+                "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
+                "inputAVector": alpha,
+                "inputBiasVector": CIVector(x: -0.5, y: -0.5, z: -0.5, w: 0)])?.outputImage else { return nil }
+        return restored.cropped(to: image.extent)
+    }
+
+    /// A compact 3D LUT applies one human-weighted luminance curve to RGB.
+    /// It preserves channel ratios, progressively returns to identity in the
+    /// highlights, and rescales only when a component would otherwise clip.
+    private func luminanceStretch(_ image: CIImage, amount: Double, gain: Double,
+        highlightProtection: Double) -> CIImage? {
+        let n = 32
+        let d = Double(n - 1)
+        let strength = min(64, max(0.1, amount))
+        let outputGain = min(1.12, max(0.35, gain))
+        let protection = min(0.88, max(0.35, highlightProtection))
+        var cube: [Float] = []; cube.reserveCapacity(n*n*n*4)
+        for b in 0..<n { for g in 0..<n { for r in 0..<n {
+            let rgb = [Double(r)/d, Double(g)/d, Double(b)/d]
+            let luma = 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
+            let stretched = asinh(strength*luma) / asinh(strength) * outputGain
+            let t = min(1, max(0, (luma-protection) / max(0.01, 0.96-protection)))
+            let smooth = t*t*(3-2*t)
+            let mapped = stretched*(1-smooth) + luma*smooth
+            var output = rgb.map { $0 * mapped / max(luma, 1.0/65535.0) }
+            let peak = output.max() ?? 1
+            if peak > 1 { output = output.map { $0 / peak } }
+            cube.append(contentsOf: output.map { Float(min(1, max(0, $0))) } + [1])
+        } } }
+        let data = cube.withUnsafeBytes { Data($0) }
+        return CIFilter(name: "CIColorCubeWithColorSpace", parameters: [
+            kCIInputImageKey: image, "inputCubeDimension": n,
+            "inputCubeData": data, "inputColorSpace": colorSpace])?.outputImage
     }
 
     private func multipliedMask(_ first: CIImage, _ second: CIImage) -> CIImage? {
