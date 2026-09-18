@@ -33,6 +33,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         started = true
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--photo-ui-test") { selectedTab = .lab; return }
+        if ProcessInfo.processInfo.arguments.contains("--cloud-ui-test") { selectedTab = .clouds; return }
         #endif
         locationManager.requestWhenInUseAuthorization()
         locationManager.requestLocation()
@@ -42,6 +43,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     func refresh() async {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--photo-ui-test") { return }
+        if ProcessInfo.processInfo.arguments.contains("--cloud-ui-test") { return }
         #endif
         guard !isLoading else { return }
         isLoading = true

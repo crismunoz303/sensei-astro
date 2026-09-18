@@ -30,7 +30,7 @@ final class PhotoFlowUITests: XCTestCase {
 
     func testCloudNavigationDoesNotInventForecastWhileUnavailable() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--photo-ui-test"]
+        app.launchArguments = ["--cloud-ui-test"]
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Clouds"].waitForExistence(timeout: 30))
         app.tabBars.buttons["Clouds"].tap()
