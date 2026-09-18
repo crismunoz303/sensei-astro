@@ -1,4 +1,4 @@
-# Sensei Astro Studio 1.5.0
+# Sensei Astro Studio 1.6.0
 
 Native iPhone companion for Seestar S30 Pro capture planning and conventional,
 original-preserving photo editing. Red/dark interface and Sensei's existing
@@ -45,6 +45,16 @@ Andromeda icon. The user operates the telescope in the Seestar app.
 - Identify scores as planning heuristics; distinguish the best sampled time
   from exact astronomical culmination. No confidence percentages are implied.
 - Photo editor remains available while astronomy data loads.
+
+## Cloud map
+
+- A dedicated tab embeds Ventusky's permitted interactive total-cloud-cover
+  map, centered on the current observing location with Huntington Park as the
+  location fallback.
+- The map retains Ventusky's pan, zoom, model and forecast-time controls.
+- A separate 24-hour strip displays Open-Meteo percentages from the same
+  forecast already used by the planner and marks samples during astronomical
+  darkness. The app labels the two sources so their values are not conflated.
 
 ## Verification
 

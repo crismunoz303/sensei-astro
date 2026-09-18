@@ -19,6 +19,10 @@ struct RootView: View {
                 .tabItem { Label("Targets", systemImage: "scope") }
                 .tag(AstroTab.targets)
 
+            NavigationStack { CloudMapView() }
+                .tabItem { Label("Clouds", systemImage: "cloud.fill") }
+                .tag(AstroTab.clouds)
+
             NavigationStack { PhotoLabView() }
                 .tabItem { Label("True Edit", systemImage: "slider.horizontal.3") }
                 .tag(AstroTab.lab)

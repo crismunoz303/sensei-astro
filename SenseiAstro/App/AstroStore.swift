@@ -9,9 +9,9 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var hasLoaded = false
     @Published var errorMessage: String?
     @Published var selectedTab: AstroTab = .tonight
+    @Published private(set) var observingCoordinate = AstroCoordinate.huntingtonPark
 
     private let locationManager = CLLocationManager()
-    private var coordinate = AstroCoordinate.huntingtonPark
     private var locationName = "HUNTINGTON PARK"
     private var started = false
     private var lastRefreshAttempt: Date?
@@ -41,10 +41,10 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
         isLoading = true
         lastRefreshAttempt = Date()
         errorMessage = nil
-        let usedCoordinate = coordinate
+        let usedCoordinate = observingCoordinate
         let usedName = locationName
         let result = await AstroData.load(at: usedCoordinate, locationName: usedName)
-        if usedCoordinate != coordinate {
+        if usedCoordinate != observingCoordinate {
             isLoading = false
             await refresh()
             return
@@ -73,7 +73,7 @@ final class AstroStore: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func handleLocation(_ latest: CLLocation) {
-        coordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
+        observingCoordinate = AstroCoordinate(latitude: latest.coordinate.latitude, longitude: latest.coordinate.longitude)
         let fallbackDistance = latest.distance(from: CLLocation(latitude: AstroCoordinate.huntingtonPark.latitude, longitude: AstroCoordinate.huntingtonPark.longitude))
         locationName = fallbackDistance < 25_000 ? "HUNTINGTON PARK" : "CURRENT LOCATION"
         Task {

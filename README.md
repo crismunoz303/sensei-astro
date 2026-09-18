@@ -4,7 +4,13 @@ Native SwiftUI iPhone companion for a Seestar S30 Pro on a standard tripod.
 Tonight and Targets provide locally ranked capture plans. True Edit provides
 conventional photo processing while preserving the imported source bytes.
 
-## Version 1.5.0
+## Version 1.6.0
+
+Clouds adds an interactive Ventusky total-cloud-cover map centered on the
+current observing location, with Huntington Park as the fallback. The same
+screen shows the next 24 hours of exact Open-Meteo cloud percentages already
+used by the capture planner, highlights astronomical darkness, and identifies
+the clearest forecast hour.
 
 True Edit now builds a deterministic astrophotography development plan from each imported image: sigma-clipped cubic background correction, per-channel sky neutralization, conservative black placement, measured display gain, two-stage background-only denoise, protected multiscale contrast, and signal-masked color enhancement. Existing projects are reanalyzed when opened so they do not retain the weaker 1.4 plan. It never uses generative AI or replacement imagery, and the imported bytes remain checksum-verified and unchanged.
 
