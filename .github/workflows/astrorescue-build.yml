@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - astrorescue-v0.3.2-seestar-authfix
+      - astrorescue-v0.3.3-seestar-guestfix
     paths:
       - "AstroRescue/**"
       - ".github/workflows/astrorescue-build.yml"
@@ -66,12 +66,12 @@ jobs:
           mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/AstroRescue.app Payload/
           test -f Payload/AstroRescue.app/Frameworks/AMSMB2.framework/AMSMB2
-          zip -qry AstroRescue-v0.3.2-SEESTAR-AUTHFIX-unsigned.ipa Payload
+          zip -qry AstroRescue-v0.3.3-SEESTAR-GUESTFIX-unsigned.ipa Payload
 
       - name: Upload IPA and build log
         uses: actions/upload-artifact@v4
         with:
-          name: AstroRescue-v0.3.2-SEESTAR-AUTHFIX
+          name: AstroRescue-v0.3.3-SEESTAR-GUESTFIX
           path: |
-            AstroRescue/AstroRescue-v0.3.2-SEESTAR-AUTHFIX-unsigned.ipa
+            AstroRescue/AstroRescue-v0.3.3-SEESTAR-GUESTFIX-unsigned.ipa
             AstroRescue/xcodebuild.log
