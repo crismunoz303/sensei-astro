@@ -968,7 +968,7 @@ struct ContentView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.numbersAndPunctuation)
 
-                Text("AstroRescue uses Seestar's documented Guest SMB access. No Seestar username or password is required.")
+                Text("AstroRescue uses a true anonymous SMB session for Seestar's EMMC Images share. No username or password is required.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
