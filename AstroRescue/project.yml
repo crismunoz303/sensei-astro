@@ -19,6 +19,7 @@ targets:
     platform: iOS
     dependencies:
       - package: AMSMB2
+        embed: true
     sources:
       - path: AstroRescue
         excludes:
@@ -27,8 +28,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cris.AstroRescue
         PRODUCT_NAME: AstroRescue
-        MARKETING_VERSION: 0.3.0
-        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 0.3.1
+        CURRENT_PROJECT_VERSION: 6
         INFOPLIST_FILE: AstroRescue/Info.plist
     scheme:
       gatherCoverageData: false
