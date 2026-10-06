@@ -47,105 +47,81 @@ final class SeestarSMBService: @unchecked Sendable {
     private var shareName: String?
     private var myWorksPath = "/MyWorks"
 
-    func connect(
-        host: String,
-        username: String = "",
-        password: String = ""
-    ) async throws -> (folders: [SeestarFolder], storage: SeestarStorageInfo?) {
+    func connect(host: String) async throws -> (folders: [SeestarFolder], storage: SeestarStorageInfo?) {
         let clean = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, let url = URL(string: "smb://\(clean)") else {
             throw ServiceError.badHost
         }
 
-        struct Login {
-            let user: String
-            let password: String
+        let credential = URLCredential(
+            user: "guest",
+            password: "",
+            persistence: .forSession
+        )
+
+        guard let manager = SMB2Manager(url: url, credential: credential) else {
+            throw ServiceError.badHost
         }
 
-        var logins: [Login] = []
-        let enteredUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if !enteredUser.isEmpty {
-            logins.append(Login(user: enteredUser, password: password))
-        }
-
-        // Official Seestar desktop instructions use Guest access.
-        logins.append(Login(user: "guest", password: ""))
-
-        // Older Seestar/Samba builds have also accepted this maintenance login.
-        // Keep it as a fallback only; the user's actual device credentials are preferred.
-        logins.append(Login(user: "zwo", password: "admin"))
-
+        // Important: do NOT enumerate shares first. AMSMB2's listShares()
+        // connects through IPC$, and Seestar can reject Guest on IPC$ even
+        // though Guest is allowed on the actual EMMC Images share.
+        let knownShares = ["EMMC Images", "EMMC_Images", "EMMCImages"]
+        var connectedShare: String?
         var lastError: Error?
 
-        for login in logins {
-            let credential = URLCredential(
-                user: login.user,
-                password: login.password,
-                persistence: .forSession
-            )
-
-            guard let manager = SMB2Manager(url: url, credential: credential) else {
-                continue
-            }
-
+        for share in knownShares {
             do {
-                let shares = try await manager.listShares()
-                guard let share = shares.first(where: {
-                    $0.name.lowercased().contains("emmc")
-                })?.name ?? shares.first(where: {
-                    $0.name.lowercased().contains("image")
-                })?.name else {
-                    throw ServiceError.noEMMCShare
-                }
-
                 try await manager.connectShare(name: share)
-
-                self.client = manager
-                self.shareName = share
-
-                let root = try await manager.contentsOfDirectory(atPath: "/")
-                if let myWorks = root.first(where: {
-                    (($0[.nameKey] as? String) ?? "").caseInsensitiveCompare("MyWorks") == .orderedSame
-                }) {
-                    myWorksPath = (myWorks[.pathKey] as? String) ?? "/MyWorks"
-                } else {
-                    let fallback = try? await manager.contentsOfDirectory(atPath: "/MyWorks")
-                    guard fallback != nil else { throw ServiceError.noMyWorks }
-                    myWorksPath = "/MyWorks"
-                }
-
-                let top = try await manager.contentsOfDirectory(atPath: myWorksPath)
-                let folders: [SeestarFolder] = top.compactMap { entry in
-                    let type = entry[.fileResourceTypeKey] as? URLFileResourceType
-                    guard type == .directory,
-                          let name = entry[.nameKey] as? String,
-                          !name.hasPrefix(".") else { return nil }
-
-                    let path = (entry[.pathKey] as? String)
-                        ?? "\(myWorksPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(name)"
-
-                    return SeestarFolder(name: name, path: normalizeRemotePath(path))
-                }
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
-                var storage: SeestarStorageInfo?
-                if let attrs = try? await manager.attributesOfFileSystem(forPath: "/") {
-                    let total = number(attrs[.systemSize])
-                    let free = number(attrs[.systemFreeSize])
-                    if total > 0 {
-                        storage = SeestarStorageInfo(free: free, total: total)
-                    }
-                }
-
-                return (folders, storage)
+                connectedShare = share
+                break
             } catch {
                 lastError = error
-                try? await manager.disconnectShare(gracefully: false)
             }
         }
 
-        throw lastError ?? ServiceError.noClient
+        guard let share = connectedShare else {
+            throw lastError ?? ServiceError.noEMMCShare
+        }
+
+        self.client = manager
+        self.shareName = share
+
+        let root = try await manager.contentsOfDirectory(atPath: "/")
+        if let myWorks = root.first(where: {
+            (($0[.nameKey] as? String) ?? "").caseInsensitiveCompare("MyWorks") == .orderedSame
+        }) {
+            myWorksPath = (myWorks[.pathKey] as? String) ?? "/MyWorks"
+        } else {
+            let fallback = try? await manager.contentsOfDirectory(atPath: "/MyWorks")
+            guard fallback != nil else { throw ServiceError.noMyWorks }
+            myWorksPath = "/MyWorks"
+        }
+
+        let top = try await manager.contentsOfDirectory(atPath: myWorksPath)
+        let folders: [SeestarFolder] = top.compactMap { entry in
+            let type = entry[.fileResourceTypeKey] as? URLFileResourceType
+            guard type == .directory,
+                  let name = entry[.nameKey] as? String,
+                  !name.hasPrefix(".") else { return nil }
+
+            let path = (entry[.pathKey] as? String)
+                ?? "\(myWorksPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(name)"
+
+            return SeestarFolder(name: name, path: normalizeRemotePath(path))
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        var storage: SeestarStorageInfo?
+        if let attrs = try? await manager.attributesOfFileSystem(forPath: "/") {
+            let total = number(attrs[.systemSize])
+            let free = number(attrs[.systemFreeSize])
+            if total > 0 {
+                storage = SeestarStorageInfo(free: free, total: total)
+            }
+        }
+
+        return (folders, storage)
     }
 
     func backup(
