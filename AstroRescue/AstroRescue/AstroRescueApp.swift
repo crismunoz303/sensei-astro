@@ -68,6 +68,18 @@ final class RescueViewModel: ObservableObject {
     @Published var showAlert = false
     @Published var alertMessage = ""
 
+    @Published var seestarHost = "10.0.0.1"
+    @Published var seestarFolders: [SeestarFolder] = []
+    @Published var selectedSeestarPaths: Set<String> = []
+    @Published var verifiedSeestarFolderPaths: Set<String> = []
+    @Published var seestarStorage: SeestarStorageInfo?
+    @Published var seestarStatus = "Not connected"
+    @Published var isConnectingSeestar = false
+    @Published var isBackingUpSeestar = false
+    @Published var seestarProgress = 0.0
+    @Published var seestarCopiedBytes: Int64 = 0
+
+    private let seestarService = SeestarSMBService()
     private var scanTask: Task<Void, Never>?
 
     var deviceStorage: (used: Int64, free: Int64, total: Int64)? {
@@ -266,6 +278,118 @@ final class RescueViewModel: ObservableObject {
             present("Deletion request completed. iOS may keep those files in Recently Deleted until you empty that album.")
         } catch {
             present(error.localizedDescription)
+        }
+    }
+
+    func connectSeestar() async {
+        guard !isConnectingSeestar else { return }
+        isConnectingSeestar = true
+        seestarStatus = "Connecting to (seestarHost)…"
+
+        do {
+            let result = try await seestarService.connect(host: seestarHost)
+            seestarFolders = result.folders
+            seestarStorage = result.storage
+            selectedSeestarPaths = Set(result.folders.map(.path))
+            verifiedSeestarFolderPaths.removeAll()
+            seestarStatus = "Connected • (result.folders.count) MyWorks folder(s)"
+        } catch {
+            seestarFolders = []
+            selectedSeestarPaths.removeAll()
+            seestarStorage = nil
+            seestarStatus = "Connection failed"
+            present("Could not connect to Seestar: (error.localizedDescription)")
+        }
+
+        isConnectingSeestar = false
+    }
+
+    func toggleSeestarFolder(_ path: String) {
+        if selectedSeestarPaths.contains(path) {
+            selectedSeestarPaths.remove(path)
+        } else {
+            selectedSeestarPaths.insert(path)
+        }
+    }
+
+    func toggleAllSeestarFolders() {
+        if selectedSeestarPaths.count == seestarFolders.count {
+            selectedSeestarPaths.removeAll()
+        } else {
+            selectedSeestarPaths = Set(seestarFolders.map(.path))
+        }
+    }
+
+    func backupSelectedSeestarToUSB() async {
+        guard !isBackingUpSeestar else { return }
+        guard let root = destinationURL else {
+            present("Create the USB Vault first, then back up your Seestar.")
+            return
+        }
+
+        let chosen = seestarFolders.filter { selectedSeestarPaths.contains($0.path) }
+        guard !chosen.isEmpty else {
+            present("Select at least one Seestar folder.")
+            return
+        }
+
+        let scoped = root.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { root.stopAccessingSecurityScopedResource() }
+            isBackingUpSeestar = false
+        }
+
+        isBackingUpSeestar = true
+        seestarProgress = 0
+        seestarCopiedBytes = 0
+        verifiedSeestarFolderPaths.removeAll()
+
+        do {
+            let summary = try await seestarService.backup(
+                folders: chosen,
+                to: root
+            ) { [weak self] status, completedFiles, totalFiles, bytesCopied in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.seestarStatus = status
+                    self.seestarCopiedBytes = bytesCopied
+                    if totalFiles > 0 {
+                        self.seestarProgress = Double(completedFiles) / Double(totalFiles)
+                    }
+                }
+            }
+
+            verifiedSeestarFolderPaths = summary.verifiedFolderPaths
+            seestarProgress = 1
+            seestarCopiedBytes = summary.bytesCopied
+            seestarStatus = "Backup verified • (summary.filesCopied) file(s)"
+            present("Seestar backup finished and verified. (summary.filesCopied) file(s) copied to USB. Nothing has been deleted from the Seestar yet.")
+        } catch {
+            seestarStatus = "Backup stopped"
+            present("Seestar backup stopped: (error.localizedDescription)
+
+No unverified source folder will be offered for deletion.")
+        }
+    }
+
+    func deleteVerifiedFromSeestar() async {
+        let paths = verifiedSeestarFolderPaths
+        guard !paths.isEmpty else { return }
+
+        do {
+            try await seestarService.deleteVerifiedFolders(paths: paths)
+            seestarFolders.removeAll { paths.contains($0.path) }
+            selectedSeestarPaths.subtract(paths)
+            verifiedSeestarFolderPaths.removeAll()
+            seestarStatus = "Verified folders removed from Seestar"
+            if let result = try? await seestarService.connect(host: seestarHost) {
+                seestarFolders = result.folders
+                seestarStorage = result.storage
+                selectedSeestarPaths = Set(result.folders.map(.path))
+            }
+            present("The verified folders were deleted from the Seestar after the USB backup completed.")
+        } catch {
+            present("The USB backup is still safe, but AstroRescue could not delete those folders from Seestar: (error.localizedDescription)")
         }
     }
 
@@ -709,6 +833,7 @@ struct ContentView: View {
     @State private var vaultExportRequest: VaultExportRequest?
     @State private var showReview = false
     @State private var showDeleteConfirm = false
+    @State private var showSeestarDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -717,6 +842,7 @@ struct ContentView: View {
                     introCard
                     storageCard
                     usbCard
+                    seestarCard
                     scanCard
                     safetyCard
                 }
@@ -737,6 +863,14 @@ struct ContentView: View {
                     ReviewView()
                 }
                 .environmentObject(model)
+            }
+            .alert("Delete verified Seestar folders?", isPresented: $showSeestarDeleteConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete from Seestar", role: .destructive) {
+                    Task { await model.deleteVerifiedFromSeestar() }
+                }
+            } message: {
+                Text("Only folders whose files were copied to the USB and SHA-256 verified are included. This deletes the originals from the Seestar telescope.")
             }
             .alert("Delete verified iPhone originals?", isPresented: $showDeleteConfirm) {
                 Button("Cancel", role: .cancel) {}
@@ -820,6 +954,117 @@ struct ContentView: View {
             }
         } label: {
             Label("USB Destination", systemImage: "externaldrive")
+        }
+    }
+
+    private var seestarCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Back up MyWorks directly from the Seestar to your USB. This uses the telescope's network share, not the Seestar app's private iPhone storage.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                TextField("Seestar IP", text: $model.seestarHost)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+
+                HStack {
+                    Button {
+                        Task { await model.connectSeestar() }
+                    } label: {
+                        Label(model.isConnectingSeestar ? "Connecting…" : "Connect Seestar", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isConnectingSeestar || model.isBackingUpSeestar)
+
+                    if !model.seestarFolders.isEmpty {
+                        Button(model.selectedSeestarPaths.count == model.seestarFolders.count ? "Deselect All" : "Select All") {
+                            model.toggleAllSeestarFolders()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                Text(model.seestarStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let s = model.seestarStorage {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ProgressView(
+                            value: Double(max(s.total - s.free, 0)),
+                            total: Double(max(s.total, 1))
+                        )
+                        Text("\(StorageInfo.format(s.free)) free of \(StorageInfo.format(s.total)) on Seestar")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !model.seestarFolders.isEmpty {
+                    Divider()
+
+                    ForEach(model.seestarFolders.prefix(40)) { folder in
+                        Button {
+                            model.toggleSeestarFolder(folder.path)
+                        } label: {
+                            HStack {
+                                Image(systemName: model.selectedSeestarPaths.contains(folder.path) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(model.selectedSeestarPaths.contains(folder.path) ? .blue : .secondary)
+                                Text(folder.name)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if model.seestarFolders.count > 40 {
+                        Text("Showing first 40 folders.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if model.isBackingUpSeestar {
+                        ProgressView(value: model.seestarProgress)
+                        Text("\(Int(model.seestarProgress * 100))% • \(StorageInfo.format(model.seestarCopiedBytes)) copied")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        Task { await model.backupSelectedSeestarToUSB() }
+                    } label: {
+                        Label("Back Up \(model.selectedSeestarPaths.count) Folder(s) to USB", systemImage: "externaldrive.badge.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        model.selectedSeestarPaths.isEmpty
+                        || model.destinationURL == nil
+                        || model.isBackingUpSeestar
+                    )
+                }
+
+                if !model.verifiedSeestarFolderPaths.isEmpty {
+                    Divider()
+                    Label("\(model.verifiedSeestarFolderPaths.count) folder(s) verified on USB", systemImage: "checkmark.shield.fill")
+                        .foregroundStyle(.green)
+
+                    Button("Free Seestar Storage", role: .destructive) {
+                        showSeestarDeleteConfirm = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text("Direct Seestar Wi‑Fi normally uses 10.0.0.1. In Station Mode, enter the Seestar IP shown in its Wi‑Fi settings.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        } label: {
+            Label("Seestar Direct", systemImage: "telescope")
         }
     }
 
