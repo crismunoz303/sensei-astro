@@ -699,10 +699,14 @@ struct PhotoThumbnail: View {
     }
 }
 
+struct VaultExportRequest: Identifiable {
+    let id = UUID()
+    let sourceURL: URL
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: RescueViewModel
-    @State private var showPicker = false
-    @State private var vaultExportSource: URL?
+    @State private var vaultExportRequest: VaultExportRequest?
     @State private var showReview = false
     @State private var showDeleteConfirm = false
 
@@ -720,18 +724,12 @@ struct ContentView: View {
             }
             .navigationTitle("AstroRescue")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showPicker) {
-                if let source = vaultExportSource {
-                    VaultExporter(sourceURL: source) { url in
-                        showPicker = false
-                        vaultExportSource = nil
-                        model.registerVault(url)
-                    } onCancel: {
-                        showPicker = false
-                        vaultExportSource = nil
-                    }
-                } else {
-                    Text("Preparing USB Vault…")
+            .sheet(item: $vaultExportRequest) { request in
+                VaultExporter(sourceURL: request.sourceURL) { url in
+                    vaultExportRequest = nil
+                    model.registerVault(url)
+                } onCancel: {
+                    vaultExportRequest = nil
                 }
             }
             .sheet(isPresented: $showReview) {
@@ -812,8 +810,8 @@ struct ContentView: View {
 
                 Button(model.destinationURL == nil ? "Create USB Vault" : "Create New USB Vault") {
                     do {
-                        vaultExportSource = try model.prepareVaultForExport()
-                        showPicker = true
+                        let source = try model.prepareVaultForExport()
+                        vaultExportRequest = VaultExportRequest(sourceURL: source)
                     } catch {
                         model.present("Could not prepare the USB Vault: \(error.localizedDescription)")
                     }
