@@ -958,7 +958,7 @@ struct ContentView: View {
     private var seestarCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Back up MyWorks directly from the Seestar to your USB. This uses the telescope's network share, not the Seestar app's private iPhone storage.")
+                Text("Back up MyWorks directly from the Seestar to your USB. Folder listings use SMB; file transfers use Seestar's HTTP server with automatic retry and verification.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
