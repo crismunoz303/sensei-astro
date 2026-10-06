@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - astrorescue-v0.2.1-usbvault-fix
+      - astrorescue-v0.3.0-seestar-direct
     paths:
       - "AstroRescue/**"
       - ".github/workflows/astrorescue-build.yml"
@@ -46,12 +46,12 @@ jobs:
           rm -rf Payload
           mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/AstroRescue.app Payload/
-          zip -qry AstroRescue-v0.2.1-USBVAULT-FIX-unsigned.ipa Payload
+          zip -qry AstroRescue-v0.3.0-SEESTAR-DIRECT-unsigned.ipa Payload
 
       - name: Upload IPA and build log
         uses: actions/upload-artifact@v4
         with:
-          name: AstroRescue-v0.2.1-USBVAULT-FIX
+          name: AstroRescue-v0.3.0-SEESTAR-DIRECT
           path: |
-            AstroRescue/AstroRescue-v0.2.1-USBVAULT-FIX-unsigned.ipa
+            AstroRescue/AstroRescue-v0.3.0-SEESTAR-DIRECT-unsigned.ipa
             AstroRescue/xcodebuild.log
