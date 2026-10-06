@@ -284,21 +284,21 @@ final class RescueViewModel: ObservableObject {
     func connectSeestar() async {
         guard !isConnectingSeestar else { return }
         isConnectingSeestar = true
-        seestarStatus = "Connecting to (seestarHost)…"
+        seestarStatus = "Connecting to \(seestarHost)…"
 
         do {
             let result = try await seestarService.connect(host: seestarHost)
             seestarFolders = result.folders
             seestarStorage = result.storage
-            selectedSeestarPaths = Set(result.folders.map(.path))
+            selectedSeestarPaths = Set(result.folders.map(\.path))
             verifiedSeestarFolderPaths.removeAll()
-            seestarStatus = "Connected • (result.folders.count) MyWorks folder(s)"
+            seestarStatus = "Connected • \(result.folders.count) MyWorks folder(s)"
         } catch {
             seestarFolders = []
             selectedSeestarPaths.removeAll()
             seestarStorage = nil
             seestarStatus = "Connection failed"
-            present("Could not connect to Seestar: (error.localizedDescription)")
+            present("Could not connect to Seestar: \(error.localizedDescription)")
         }
 
         isConnectingSeestar = false
@@ -316,7 +316,7 @@ final class RescueViewModel: ObservableObject {
         if selectedSeestarPaths.count == seestarFolders.count {
             selectedSeestarPaths.removeAll()
         } else {
-            selectedSeestarPaths = Set(seestarFolders.map(.path))
+            selectedSeestarPaths = Set(seestarFolders.map(\.path))
         }
     }
 
@@ -362,13 +362,11 @@ final class RescueViewModel: ObservableObject {
             verifiedSeestarFolderPaths = summary.verifiedFolderPaths
             seestarProgress = 1
             seestarCopiedBytes = summary.bytesCopied
-            seestarStatus = "Backup verified • (summary.filesCopied) file(s)"
-            present("Seestar backup finished and verified. (summary.filesCopied) file(s) copied to USB. Nothing has been deleted from the Seestar yet.")
+            seestarStatus = "Backup verified • \(summary.filesCopied) file(s)"
+            present("Seestar backup finished and verified. \(summary.filesCopied) file(s) copied to USB. Nothing has been deleted from the Seestar yet.")
         } catch {
             seestarStatus = "Backup stopped"
-            present("Seestar backup stopped: (error.localizedDescription)
-
-No unverified source folder will be offered for deletion.")
+            present("Seestar backup stopped: \(error.localizedDescription)\n\nNo unverified source folder will be offered for deletion.")
         }
     }
 
@@ -385,11 +383,11 @@ No unverified source folder will be offered for deletion.")
             if let result = try? await seestarService.connect(host: seestarHost) {
                 seestarFolders = result.folders
                 seestarStorage = result.storage
-                selectedSeestarPaths = Set(result.folders.map(.path))
+                selectedSeestarPaths = Set(result.folders.map(\.path))
             }
             present("The verified folders were deleted from the Seestar after the USB backup completed.")
         } catch {
-            present("The USB backup is still safe, but AstroRescue could not delete those folders from Seestar: (error.localizedDescription)")
+            present("The USB backup is still safe, but AstroRescue could not delete those folders from Seestar: \(error.localizedDescription)")
         }
     }
 
