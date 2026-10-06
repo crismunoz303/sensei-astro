@@ -32,6 +32,11 @@
     <string>AstroRescue only changes your Photos library when you explicitly confirm deletion of items that have verified USB backups.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>AstroRescue connects directly to your Seestar on your local Wi-Fi so it can back up MyWorks to your USB drive.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
     <key>UTExportedTypeDeclarations</key>
