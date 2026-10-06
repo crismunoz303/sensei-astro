@@ -69,8 +69,6 @@ final class RescueViewModel: ObservableObject {
     @Published var alertMessage = ""
 
     @Published var seestarHost = "10.0.0.1"
-    @Published var seestarUsername = ""
-    @Published var seestarPassword = "12345678"
     @Published var seestarFolders: [SeestarFolder] = []
     @Published var selectedSeestarPaths: Set<String> = []
     @Published var verifiedSeestarFolderPaths: Set<String> = []
@@ -289,11 +287,7 @@ final class RescueViewModel: ObservableObject {
         seestarStatus = "Connecting to \(seestarHost)…"
 
         do {
-            let result = try await seestarService.connect(
-                host: seestarHost,
-                username: seestarUsername,
-                password: seestarPassword
-            )
+            let result = try await seestarService.connect(host: seestarHost)
             seestarFolders = result.folders
             seestarStorage = result.storage
             selectedSeestarPaths = Set(result.folders.map(\.path))
@@ -386,11 +380,7 @@ final class RescueViewModel: ObservableObject {
             selectedSeestarPaths.subtract(paths)
             verifiedSeestarFolderPaths.removeAll()
             seestarStatus = "Verified folders removed from Seestar"
-            if let result = try? await seestarService.connect(
-                host: seestarHost,
-                username: seestarUsername,
-                password: seestarPassword
-            ) {
+            if let result = try? await seestarService.connect(host: seestarHost) {
                 seestarFolders = result.folders
                 seestarStorage = result.storage
                 selectedSeestarPaths = Set(result.folders.map(\.path))
@@ -978,15 +968,7 @@ struct ContentView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.numbersAndPunctuation)
 
-                TextField("Device SN / Wi-Fi name (example: S30_xxxxxxxx)", text: $model.seestarUsername)
-                    .textFieldStyle(.roundedBorder)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-
-                SecureField("Seestar Wi-Fi password", text: $model.seestarPassword)
-                    .textFieldStyle(.roundedBorder)
-
-                Text("Use the exact device SN shown under Seestar → Device Management → Device Info. The default Seestar Wi-Fi password is 12345678 unless you changed it.")
+                Text("AstroRescue uses Seestar's documented Guest SMB access. No Seestar username or password is required.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
@@ -1079,7 +1061,7 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Direct Seestar Wi‑Fi normally uses 10.0.0.1. In Station Mode, enter the Seestar IP shown in its Wi‑Fi settings.")
+                Text("Direct Seestar Wi‑Fi normally uses 10.0.0.1. In Station Mode, use the IP shown in the Seestar app. AstroRescue connects directly to the documented EMMC Images share.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
