@@ -59,7 +59,7 @@ final class SeestarSMBService: @unchecked Sendable {
             try await smb.login(username: nil, password: nil)
             try await smb.connectShare(shareName)
         } catch {
-            try? await smb.logoff()
+            _ = try? await smb.logoff()
             throw error
         }
 
@@ -69,10 +69,13 @@ final class SeestarSMBService: @unchecked Sendable {
             .map { SeestarFolder(name: $0.name, path: "\(myWorksPath)/\($0.name)") }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        guard !folders.isEmpty || (try? await smb.existDirectory(path: myWorksPath)) == true else {
-            try? await smb.disconnectShare()
-            try? await smb.logoff()
-            throw ServiceError.noMyWorks
+        if folders.isEmpty {
+            let exists = (try? await smb.existDirectory(path: myWorksPath)) ?? false
+            if !exists {
+                _ = try? await smb.disconnectShare()
+                _ = try? await smb.logoff()
+                throw ServiceError.noMyWorks
+            }
         }
 
         self.client = smb
@@ -165,8 +168,8 @@ final class SeestarSMBService: @unchecked Sendable {
 
     func disconnect() async {
         guard let client else { return }
-        try? await client.disconnectShare()
-        try? await client.logoff()
+        _ = try? await client.disconnectShare()
+        _ = try? await client.logoff()
         self.client = nil
     }
 
