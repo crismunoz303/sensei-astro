@@ -80,25 +80,61 @@ final class RescueViewModel: ObservableObject {
     }
 
     var usbName: String {
-        destinationURL?.lastPathComponent ?? "No USB folder selected"
+        destinationURL?.lastPathComponent ?? "No USB vault connected"
     }
 
-    func chooseDestination(_ url: URL) {
+    func prepareVaultForExport() throws -> URL {
+        let fm = FileManager.default
+        let vault = fm.temporaryDirectory.appendingPathComponent("AstroRescue Vault.astrorescue", isDirectory: true)
+        if fm.fileExists(atPath: vault.path) {
+            try fm.removeItem(at: vault)
+        }
+        try fm.createDirectory(at: vault, withIntermediateDirectories: true)
+
+        let manifest = """
+        {
+          "name": "AstroRescue Vault",
+          "version": 1,
+          "createdBy": "AstroRescue"
+        }
+        """
+        try Data(manifest.utf8).write(to: vault.appendingPathComponent("manifest.json"), options: .atomic)
+        return vault
+    }
+
+    func registerVault(_ url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
             if scoped { url.stopAccessingSecurityScopedResource() }
         }
 
-        do {
-            let testURL = url.appendingPathComponent(".astrorescue-write-test")
-            try Data("AstroRescue".utf8).write(to: testURL, options: .atomic)
-            try FileManager.default.removeItem(at: testURL)
-            destinationURL = url
-            present("USB folder connected and write access verified.")
-        } catch {
-            destinationURL = nil
-            present("I can see that folder, but iOS did not grant write access. Please select the folder itself, then tap Done.")
+        var coordinationError: NSError?
+        var writeError: Error?
+
+        NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
+            do {
+                let testURL = coordinatedURL.appendingPathComponent(".astrorescue-write-test")
+                try Data("AstroRescue".utf8).write(to: testURL, options: .atomic)
+                try FileManager.default.removeItem(at: testURL)
+            } catch {
+                writeError = error
+            }
         }
+
+        if let coordinationError {
+            destinationURL = nil
+            present("iOS returned the vault, but file coordination failed: \(coordinationError.localizedDescription)")
+            return
+        }
+
+        if let writeError {
+            destinationURL = nil
+            present("The vault was created, but iOS did not grant write access: \(writeError.localizedDescription)")
+            return
+        }
+
+        destinationURL = url
+        present("USB Vault connected and write access verified.")
     }
 
     func scanPhotos() async {
@@ -170,7 +206,7 @@ final class RescueViewModel: ObservableObject {
     func offloadSelected() async {
         guard !isOffloading else { return }
         guard let root = destinationURL else {
-            present("Choose a folder on your external USB drive first.")
+            present("Create or reconnect the AstroRescue USB Vault first.")
             return
         }
 
@@ -579,6 +615,47 @@ struct DirectoryPicker: UIViewControllerRepresentable {
     }
 }
 
+struct VaultExporter: UIViewControllerRepresentable {
+    let sourceURL: URL
+    let onExported: (URL) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onExported: onExported, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forExporting: [sourceURL], asCopy: false)
+        picker.delegate = context.coordinator
+        picker.modalPresentationStyle = .fullScreen
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onExported: (URL) -> Void
+        let onCancel: () -> Void
+
+        init(onExported: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onExported = onExported
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let url = urls.first {
+                onExported(url)
+            } else {
+                onCancel()
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
+    }
+}
+
 struct PhotoThumbnail: View {
     let asset: PHAsset
     @State private var image: UIImage?
@@ -625,6 +702,7 @@ struct PhotoThumbnail: View {
 struct ContentView: View {
     @EnvironmentObject private var model: RescueViewModel
     @State private var showPicker = false
+    @State private var vaultExportSource: URL?
     @State private var showReview = false
     @State private var showDeleteConfirm = false
 
@@ -643,11 +721,17 @@ struct ContentView: View {
             .navigationTitle("AstroRescue")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showPicker) {
-                DirectoryPicker { url in
-                    model.chooseDestination(url)
-                    showPicker = false
-                } onCancel: {
-                    showPicker = false
+                if let source = vaultExportSource {
+                    VaultExporter(sourceURL: source) { url in
+                        showPicker = false
+                        vaultExportSource = nil
+                        model.registerVault(url)
+                    } onCancel: {
+                        showPicker = false
+                        vaultExportSource = nil
+                    }
+                } else {
+                    Text("Preparing USB Vault…")
                 }
             }
             .sheet(isPresented: $showReview) {
@@ -721,15 +805,20 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Plug in your Amazon Basics USB. In the picker, open Public, tap the AstroRescue folder so it is selected, then tap Done.")
+                    Text("No folder-selection step. AstroRescue creates one vault document and you save it onto Public on the USB.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Button(model.destinationURL == nil ? "Choose USB Folder" : "Change USB Folder") {
-                    showPicker = true
+                Button(model.destinationURL == nil ? "Create USB Vault" : "Create New USB Vault") {
+                    do {
+                        vaultExportSource = try model.prepareVaultForExport()
+                        showPicker = true
+                    } catch {
+                        model.present("Could not prepare the USB Vault: \(error.localizedDescription)")
+                    }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
             }
         } label: {
             Label("USB Destination", systemImage: "externaldrive")
