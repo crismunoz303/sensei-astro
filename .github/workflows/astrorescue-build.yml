@@ -1,0 +1,57 @@
+name: Build AstroRescue IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - astrorescue-v0.1
+    paths:
+      - "AstroRescue/**"
+      - ".github/workflows/astrorescue-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: AstroRescue
+        run: xcodegen generate
+
+      - name: Build unsigned device app
+        working-directory: AstroRescue
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project AstroRescue.xcodeproj \
+            -scheme AstroRescue \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build | tee xcodebuild.log
+
+      - name: Package unsigned IPA
+        working-directory: AstroRescue
+        run: |
+          rm -rf Payload
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/AstroRescue.app Payload/
+          zip -qry AstroRescue-v0.1.0-unsigned.ipa Payload
+
+      - name: Upload IPA and build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroRescue-v0.1.0
+          path: |
+            AstroRescue/AstroRescue-v0.1.0-unsigned.ipa
+            AstroRescue/xcodebuild.log
