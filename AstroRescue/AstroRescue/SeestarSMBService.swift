@@ -1,6 +1,6 @@
 import Foundation
 import CryptoKit
-import AMSMB2
+import SMBClient
 
 struct SeestarFolder: Identifiable, Hashable {
     let name: String
@@ -34,7 +34,7 @@ final class SeestarSMBService: @unchecked Sendable {
             case .noClient:
                 return "Seestar is not connected."
             case .noEMMCShare:
-                return "Connected to the Seestar, but the EMMC Images share was not found."
+                return "Connected to the Seestar, but the EMMC Images share could not be opened."
             case .noMyWorks:
                 return "Connected to the Seestar, but MyWorks was not found."
             case .verificationFailed(let name):
@@ -43,82 +43,43 @@ final class SeestarSMBService: @unchecked Sendable {
         }
     }
 
-    private var client: SMB2Manager?
-    private var shareName: String?
-    private var myWorksPath = "/MyWorks"
+    private var client: SMBClient?
+    private let shareName = "EMMC Images"
+    private let myWorksPath = "MyWorks"
 
     func connect(host: String) async throws -> (folders: [SeestarFolder], storage: SeestarStorageInfo?) {
         let clean = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, let url = URL(string: "smb://\(clean)") else {
-            throw ServiceError.badHost
+        guard !clean.isEmpty else { throw ServiceError.badHost }
+
+        let smb = SMBClient(host: clean)
+
+        do {
+            // Anonymous/null-session login. SMBClient 0.3.1 specifically
+            // disables signing for anonymous sessions, which matches Seestar.
+            try await smb.login(username: nil, password: nil)
+            try await smb.connectShare(shareName)
+        } catch {
+            try? await smb.logoff()
+            throw error
         }
 
-        let credential = URLCredential(
-            user: "guest",
-            password: "",
-            persistence: .forSession
-        )
+        let root = try await smb.listDirectory(path: myWorksPath)
+        let folders = root
+            .filter { $0.isDirectory && !$0.name.hasPrefix(".") }
+            .map { SeestarFolder(name: $0.name, path: "\(myWorksPath)/\($0.name)") }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        guard let manager = SMB2Manager(url: url, credential: credential) else {
-            throw ServiceError.badHost
+        guard !folders.isEmpty || (try? await smb.existDirectory(path: myWorksPath)) == true else {
+            try? await smb.disconnectShare()
+            try? await smb.logoff()
+            throw ServiceError.noMyWorks
         }
 
-        // Important: do NOT enumerate shares first. AMSMB2's listShares()
-        // connects through IPC$, and Seestar can reject Guest on IPC$ even
-        // though Guest is allowed on the actual EMMC Images share.
-        let knownShares = ["EMMC Images", "EMMC_Images", "EMMCImages"]
-        var connectedShare: String?
-        var lastError: Error?
-
-        for share in knownShares {
-            do {
-                try await manager.connectShare(name: share)
-                connectedShare = share
-                break
-            } catch {
-                lastError = error
-            }
-        }
-
-        guard let share = connectedShare else {
-            throw lastError ?? ServiceError.noEMMCShare
-        }
-
-        self.client = manager
-        self.shareName = share
-
-        let root = try await manager.contentsOfDirectory(atPath: "/")
-        if let myWorks = root.first(where: {
-            (($0[.nameKey] as? String) ?? "").caseInsensitiveCompare("MyWorks") == .orderedSame
-        }) {
-            myWorksPath = (myWorks[.pathKey] as? String) ?? "/MyWorks"
-        } else {
-            let fallback = try? await manager.contentsOfDirectory(atPath: "/MyWorks")
-            guard fallback != nil else { throw ServiceError.noMyWorks }
-            myWorksPath = "/MyWorks"
-        }
-
-        let top = try await manager.contentsOfDirectory(atPath: myWorksPath)
-        let folders: [SeestarFolder] = top.compactMap { entry in
-            let type = entry[.fileResourceTypeKey] as? URLFileResourceType
-            guard type == .directory,
-                  let name = entry[.nameKey] as? String,
-                  !name.hasPrefix(".") else { return nil }
-
-            let path = (entry[.pathKey] as? String)
-                ?? "\(myWorksPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(name)"
-
-            return SeestarFolder(name: name, path: normalizeRemotePath(path))
-        }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        self.client = smb
 
         var storage: SeestarStorageInfo?
-        if let attrs = try? await manager.attributesOfFileSystem(forPath: "/") {
-            let total = number(attrs[.systemSize])
-            let free = number(attrs[.systemFreeSize])
-            if total > 0 {
-                storage = SeestarStorageInfo(free: free, total: total)
-            }
+        if let free = try? await smb.availableSpace() {
+            storage = SeestarStorageInfo(free: Int64(free), total: 0)
         }
 
         return (folders, storage)
@@ -131,28 +92,30 @@ final class SeestarSMBService: @unchecked Sendable {
     ) async throws -> SeestarBackupSummary {
         guard let client else { throw ServiceError.noClient }
 
-        var inventory: [(folder: SeestarFolder, remotePath: String, relativePath: String)] = []
+        var inventory: [(folder: SeestarFolder, remotePath: String, relativePath: String, size: UInt64)] = []
 
         for folder in folders {
-            let entries = try await client.contentsOfDirectory(atPath: folder.path, recursive: true)
-            for entry in entries {
-                let type = entry[.fileResourceTypeKey] as? URLFileResourceType
-                guard type != .directory else { continue }
-
-                guard let name = entry[.nameKey] as? String else { continue }
-                let remote = normalizeRemotePath((entry[.pathKey] as? String) ?? "\(folder.path)/\(name)")
-                let relative = relativePath(remotePath: remote, under: folder.path, fallbackName: name)
-                inventory.append((folder, remote, relative))
-            }
+            try await enumerateFiles(
+                client: client,
+                rootFolder: folder,
+                currentPath: folder.path,
+                relativeBase: "",
+                into: &inventory
+            )
         }
 
         let totalFiles = inventory.count
         var completed = 0
         var copiedBytes: Int64 = 0
-        var folderFailures: [String: Bool] = [:]
+        var verifiedFolders = Set(folders.map(\.path))
 
         for item in inventory {
-            progress("Copying \(item.folder.name) • \((item.relativePath as NSString).lastPathComponent)", completed, totalFiles, copiedBytes)
+            progress(
+                "Copying \(item.folder.name) • \((item.relativePath as NSString).lastPathComponent)",
+                completed,
+                totalFiles,
+                copiedBytes
+            )
 
             let folderRoot = usbRoot
                 .appendingPathComponent("Seestar Direct", isDirectory: true)
@@ -168,22 +131,22 @@ final class SeestarSMBService: @unchecked Sendable {
                 let result = try await copyAndVerify(
                     client: client,
                     remotePath: item.remotePath,
+                    remoteSize: item.size,
                     destination: destination
                 )
                 copiedBytes += result.bytes
                 completed += 1
-                progress("Verified \((item.relativePath as NSString).lastPathComponent)", completed, totalFiles, copiedBytes)
+                progress(
+                    "Verified \((item.relativePath as NSString).lastPathComponent)",
+                    completed,
+                    totalFiles,
+                    copiedBytes
+                )
             } catch {
-                folderFailures[item.folder.path] = true
+                verifiedFolders.remove(item.folder.path)
                 throw error
             }
         }
-
-        let verifiedFolders = Set(
-            folders
-                .filter { folderFailures[$0.path] != true }
-                .map(\.path)
-        )
 
         return SeestarBackupSummary(
             verifiedFolderPaths: verifiedFolders,
@@ -194,58 +157,120 @@ final class SeestarSMBService: @unchecked Sendable {
 
     func deleteVerifiedFolders(paths: Set<String>) async throws {
         guard let client else { throw ServiceError.noClient }
+
         for path in paths.sorted() {
-            try await client.removeDirectory(atPath: path, recursive: true)
+            try await deleteDirectoryRecursively(client: client, path: path)
         }
     }
 
     func disconnect() async {
-        try? await client?.disconnectShare(gracefully: true)
-        client = nil
-        shareName = nil
+        guard let client else { return }
+        try? await client.disconnectShare()
+        try? await client.logoff()
+        self.client = nil
+    }
+
+    private func enumerateFiles(
+        client: SMBClient,
+        rootFolder: SeestarFolder,
+        currentPath: String,
+        relativeBase: String,
+        into inventory: inout [(folder: SeestarFolder, remotePath: String, relativePath: String, size: UInt64)]
+    ) async throws {
+        let entries = try await client.listDirectory(path: currentPath)
+
+        for entry in entries where entry.name != "." && entry.name != ".." {
+            let remote = "\(currentPath)/\(entry.name)"
+            let relative = relativeBase.isEmpty ? entry.name : "\(relativeBase)/\(entry.name)"
+
+            if entry.isDirectory {
+                try await enumerateFiles(
+                    client: client,
+                    rootFolder: rootFolder,
+                    currentPath: remote,
+                    relativeBase: relative,
+                    into: &inventory
+                )
+            } else {
+                inventory.append((rootFolder, remote, relative, entry.size))
+            }
+        }
     }
 
     private func copyAndVerify(
-        client: SMB2Manager,
+        client: SMBClient,
         remotePath: String,
+        remoteSize: UInt64,
         destination: URL
     ) async throws -> (bytes: Int64, sha256: String) {
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-        }
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let fm = FileManager.default
 
-        let handle = try FileHandle(forWritingTo: destination)
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        fm.createFile(atPath: destination.path, contents: nil)
+
+        guard let handle = FileHandle(forWritingAtPath: destination.path) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        let reader = client.fileReader(path: remotePath)
         var sourceHasher = SHA256()
-        var bytes: Int64 = 0
+        var offset: UInt64 = 0
 
         do {
-            let stream: AsyncThrowingStream<Data, any Error> = client.contents(
-                atPath: remotePath,
-                range: Optional<Range<UInt64>>.none
-            )
+            while offset < remoteSize {
+                let remaining = remoteSize - offset
+                let chunkSize = UInt32(min(remaining, UInt64(1024 * 1024)))
+                let chunk = try await reader.read(offset: offset, length: chunkSize)
+                if chunk.isEmpty { break }
 
-            for try await chunk in stream {
                 try handle.write(contentsOf: chunk)
                 sourceHasher.update(data: chunk)
-                bytes += Int64(chunk.count)
+                offset += UInt64(chunk.count)
             }
+
             try handle.close()
+            try await reader.close()
         } catch {
             try? handle.close()
-            try? FileManager.default.removeItem(at: destination)
+            try? await reader.close()
+            try? fm.removeItem(at: destination)
             throw error
+        }
+
+        guard offset == remoteSize else {
+            try? fm.removeItem(at: destination)
+            throw ServiceError.verificationFailed((remotePath as NSString).lastPathComponent)
         }
 
         let sourceHash = sourceHasher.finalize().map { String(format: "%02x", $0) }.joined()
         let destinationHash = try localHash(destination)
 
-        guard sourceHash == destinationHash else {
-            try? FileManager.default.removeItem(at: destination)
+        let attrs = try fm.attributesOfItem(atPath: destination.path)
+        let localSize = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+
+        guard sourceHash == destinationHash, localSize == remoteSize else {
+            try? fm.removeItem(at: destination)
             throw ServiceError.verificationFailed((remotePath as NSString).lastPathComponent)
         }
 
-        return (bytes, destinationHash)
+        return (Int64(localSize), destinationHash)
+    }
+
+    private func deleteDirectoryRecursively(client: SMBClient, path: String) async throws {
+        let entries = try await client.listDirectory(path: path)
+
+        for entry in entries where entry.name != "." && entry.name != ".." {
+            let child = "\(path)/\(entry.name)"
+            if entry.isDirectory {
+                try await deleteDirectoryRecursively(client: client, path: child)
+            } else {
+                try await client.deleteFile(path: child)
+            }
+        }
+
+        try await client.deleteDirectory(path: path)
     }
 
     private func localHash(_ url: URL) throws -> String {
@@ -260,29 +285,5 @@ final class SeestarSMBService: @unchecked Sendable {
         }
 
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private func relativePath(remotePath: String, under folderPath: String, fallbackName: String) -> String {
-        let remote = normalizeRemotePath(remotePath)
-        let base = normalizeRemotePath(folderPath)
-        let prefix = base.hasSuffix("/") ? base : base + "/"
-
-        if remote.hasPrefix(prefix) {
-            let result = String(remote.dropFirst(prefix.count))
-            if !result.isEmpty { return result }
-        }
-        return fallbackName
-    }
-
-    private func normalizeRemotePath(_ path: String) -> String {
-        let replaced = path.replacingOccurrences(of: "\\", with: "/")
-        return replaced.hasPrefix("/") ? replaced : "/" + replaced
-    }
-
-    private func number(_ value: Any?) -> Int64 {
-        if let n = value as? NSNumber { return n.int64Value }
-        if let i = value as? Int64 { return i }
-        if let i = value as? Int { return Int64(i) }
-        return 0
     }
 }
