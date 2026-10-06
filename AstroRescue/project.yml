@@ -28,8 +28,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cris.AstroRescue
         PRODUCT_NAME: AstroRescue
-        MARKETING_VERSION: 0.3.1
-        CURRENT_PROJECT_VERSION: 6
+        MARKETING_VERSION: 0.3.2
+        CURRENT_PROJECT_VERSION: 7
         INFOPLIST_FILE: AstroRescue/Info.plist
     scheme:
       gatherCoverageData: false
