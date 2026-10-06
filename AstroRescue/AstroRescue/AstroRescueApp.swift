@@ -84,7 +84,21 @@ final class RescueViewModel: ObservableObject {
     }
 
     func chooseDestination(_ url: URL) {
-        destinationURL = url
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let testURL = url.appendingPathComponent(".astrorescue-write-test")
+            try Data("AstroRescue".utf8).write(to: testURL, options: .atomic)
+            try FileManager.default.removeItem(at: testURL)
+            destinationURL = url
+            present("USB folder connected and write access verified.")
+        } catch {
+            destinationURL = nil
+            present("I can see that folder, but iOS did not grant write access. Please select the folder itself, then tap Done.")
+        }
     }
 
     func scanPhotos() async {
@@ -535,9 +549,12 @@ struct DirectoryPicker: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        // Apple's supported directory-access flow. Multiple-selection mode makes
+        // folders selectable instead of only drilling into them in the Files UI.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
         picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
+        picker.allowsMultipleSelection = true
+        picker.modalPresentationStyle = .fullScreen
         return picker
     }
 
@@ -704,7 +721,7 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Plug in your Amazon Basics USB and choose a folder on it.")
+                    Text("Plug in your Amazon Basics USB. In the picker, open Public, tap the AstroRescue folder so it is selected, then tap Done.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
