@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - astrorescue-v0.3.0-seestar-direct
+      - astrorescue-v0.3.1-launchfix
     paths:
       - "AstroRescue/**"
       - ".github/workflows/astrorescue-build.yml"
@@ -40,18 +40,38 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             clean build | tee xcodebuild.log
 
+      - name: Ensure dynamic SMB framework is embedded
+        working-directory: AstroRescue
+        run: |
+          APP="build/Build/Products/Release-iphoneos/AstroRescue.app"
+          FRAMEWORK="build/Build/Products/Release-iphoneos/PackageFrameworks/AMSMB2.framework"
+
+          echo "App linked libraries:"
+          otool -L "$APP/AstroRescue"
+
+          if otool -L "$APP/AstroRescue" | grep -q "AMSMB2.framework"; then
+            mkdir -p "$APP/Frameworks"
+            if [ ! -d "$APP/Frameworks/AMSMB2.framework" ]; then
+              cp -R "$FRAMEWORK" "$APP/Frameworks/"
+            fi
+          fi
+
+          test -f "$APP/Frameworks/AMSMB2.framework/AMSMB2"
+          echo "AMSMB2 embedded successfully."
+
       - name: Package unsigned IPA
         working-directory: AstroRescue
         run: |
           rm -rf Payload
           mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/AstroRescue.app Payload/
-          zip -qry AstroRescue-v0.3.0-SEESTAR-DIRECT-unsigned.ipa Payload
+          test -f Payload/AstroRescue.app/Frameworks/AMSMB2.framework/AMSMB2
+          zip -qry AstroRescue-v0.3.1-LAUNCHFIX-unsigned.ipa Payload
 
       - name: Upload IPA and build log
         uses: actions/upload-artifact@v4
         with:
-          name: AstroRescue-v0.3.0-SEESTAR-DIRECT
+          name: AstroRescue-v0.3.1-LAUNCHFIX
           path: |
-            AstroRescue/AstroRescue-v0.3.0-SEESTAR-DIRECT-unsigned.ipa
+            AstroRescue/AstroRescue-v0.3.1-LAUNCHFIX-unsigned.ipa
             AstroRescue/xcodebuild.log
