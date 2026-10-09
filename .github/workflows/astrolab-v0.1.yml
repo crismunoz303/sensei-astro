@@ -1,0 +1,55 @@
+name: AstroLab v0.1 iPhone Build
+on:
+  push:
+    branches: [astrolab-v0.1]
+    paths:
+      - "astrolab_payload/source.tar.xz.b64"
+      - ".github/workflows/astrolab-v0.1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore standalone AstroLab source
+        run: |
+          mkdir -p astrolab-build
+          python3 - <<'PY'
+          import base64, pathlib
+          p = pathlib.Path("astrolab_payload/source.tar.xz.b64")
+          pathlib.Path("/tmp/astrolab-source.tar.xz").write_bytes(base64.b64decode(p.read_text().strip(), validate=True))
+          PY
+          tar -xJf /tmp/astrolab-source.tar.xz -C astrolab-build
+          test -f astrolab-build/project.yml
+          test -f astrolab-build/iOS/AstroLab/AstroLabApp.swift
+      - name: Test FITS image-processing core
+        working-directory: astrolab-build
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate iOS Xcode project
+        working-directory: astrolab-build
+        run: xcodegen generate --spec project.yml
+      - name: Build unsigned native iOS app
+        working-directory: astrolab-build
+        run: |
+          xcodebuild -project AstroLab.xcodeproj -scheme AstroLab -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned IPA
+        working-directory: astrolab-build
+        run: |
+          test -d build/Build/Products/Release-iphoneos/AstroLab.app
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/AstroLab.app Payload/
+          zip -qry AstroLab-v0.1-unsigned.ipa Payload
+          test -s AstroLab-v0.1-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroLab-v0.1-unsigned-IPA
+          path: astrolab-build/AstroLab-v0.1-unsigned.ipa
+          if-no-files-found: error
