@@ -26,6 +26,16 @@ jobs:
           tar -xJf AstroLab-source.tar.xz -C astrolab
           test -f astrolab/project.yml
           test -f astrolab/iOS/AstroLab/AstroLabApp.swift
+      - name: Enable macOS platform for portable Swift tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("astrolab/Package.swift")
+          text = p.read_text()
+          assert "platforms: [.iOS(.v17)]" in text
+          p.write_text(text.replace("platforms: [.iOS(.v17)]", "platforms: [.iOS(.v17), .macOS(.v12)]"))
+          PY
       - name: Run portable FITS processor tests
         working-directory: astrolab
         run: swift test
