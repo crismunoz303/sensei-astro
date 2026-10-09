@@ -1,9 +1,9 @@
-name: AstroLab v0.1 iPhone Build
+name: AstroLab v0.1.1 - Verified Unsigned iPhone IPA
 on:
   push:
     branches: [astrolab-v0.1]
     paths:
-      - "astrolab_payload/source.tar.xz.b64"
+      - "astrolab_payload/**"
       - ".github/workflows/astrolab-v0.1.yml"
   workflow_dispatch:
 
@@ -12,44 +12,124 @@ permissions:
 
 jobs:
   ios:
+    name: AstroLab v0.1.1 (tests, build, IPA verification)
     runs-on: macos-15
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - name: Restore standalone AstroLab source
+      - name: Checkout AstroLab branch
+        uses: actions/checkout@v4
+
+      - name: Restore and verify standalone source
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p astrolab-build
           python3 - <<'PY'
-          import base64, pathlib
-          p = pathlib.Path("astrolab_payload/source.tar.xz.b64")
-          pathlib.Path("/tmp/astrolab-source.tar.xz").write_bytes(base64.b64decode(p.read_text().strip(), validate=True))
+          import base64
+          from pathlib import Path
+          source = Path("astrolab_payload/source.tar.xz.b64")
+          archive = Path("/tmp/astrolab-source.tar.xz")
+          archive.write_bytes(base64.b64decode(source.read_text().strip(), validate=True))
           PY
+          echo 'bb895e52d5d527cc808ecabfa96a57fabfb6156f9adcdaa597d84ddb36089343  /tmp/astrolab-source.tar.xz' | shasum -a 256 -c -
           tar -xJf /tmp/astrolab-source.tar.xz -C astrolab-build
           test -f astrolab-build/project.yml
           test -f astrolab-build/iOS/AstroLab/AstroLabApp.swift
-      - name: Test FITS image-processing core
+          test -f astrolab-build/Package.swift
+
+      - name: Make portable Swift tests compatible with runner macOS target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          package = Path("astrolab-build/Package.swift")
+          source = package.read_text()
+          old = "platforms: [.iOS(.v17)]"
+          if old not in source:
+              raise SystemExit("Unexpected Package.swift platform declaration; inspect before updating")
+          package.write_text(source.replace(old, "platforms: [.iOS(.v17), .macOS(.v13)]", 1))
+          PY
+
+      - name: Check offline and non-generative source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("astrolab-build")
+          files = list(root.glob("Sources/**/*.swift")) + list(root.glob("iOS/**/*.swift"))
+          if not files:
+              raise SystemExit("No Swift source found")
+          forbidden = (
+              "URLSession.shared", "URLSession(configuration:", "import Network",
+              "import WebKit", "import CoreML", "import FoundationModels",
+              "OpenAI", "StableDiffusion", "MLStableDiffusion"
+          )
+          violations = [(str(p), item) for p in files for item in forbidden if item in p.read_text()]
+          if violations:
+              for filename, item in violations:
+                  print(f"REVIEW REQUIRED: {filename}: {item}")
+              raise SystemExit("Offline/non-generative boundary requires review")
+          print(f"Checked {len(files)} Swift source files for disallowed network/generative interfaces")
+          PY
+
+      - name: Run FITS image-processor regression tests
         working-directory: astrolab-build
         run: swift test
+
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Generate iOS Xcode project
+
+      - name: Generate native iOS project
         working-directory: astrolab-build
         run: xcodegen generate --spec project.yml
-      - name: Build unsigned native iOS app
+
+      - name: Build iPhone Release app without signing
         working-directory: astrolab-build
+        shell: bash
         run: |
-          xcodebuild -project AstroLab.xcodeproj -scheme AstroLab -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
-      - name: Package unsigned IPA
+          set -euo pipefail
+          xcodebuild -project AstroLab.xcodeproj -scheme AstroLab -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build MARKETING_VERSION=0.1.1 CURRENT_PROJECT_VERSION=${{ github.run_number }} CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+
+      - name: Verify compiled app and package IPA
         working-directory: astrolab-build
+        shell: bash
         run: |
-          test -d build/Build/Products/Release-iphoneos/AstroLab.app
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/AstroLab.app"
+          IPA="AstroLab-v0.1.1-build${{ github.run_number }}-unsigned.ipa"
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          IDENTIFIER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
+          echo "Bundle ID: $IDENTIFIER"
+          echo "App version: $VERSION ($BUILD)"
+          test "$VERSION" = '0.1.1'
+          test "$BUILD" = '${{ github.run_number }}'
+          test -f "$APP/$EXECUTABLE"
+          xcrun lipo -archs "$APP/$EXECUTABLE" | tr ' ' '\n' | grep -qx arm64
+          test ! -d "$APP/_CodeSignature"
+          if codesign --verify "$APP" >/dev/null 2>&1; then
+            echo 'Unexpected signed build'
+            exit 1
+          fi
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/AstroLab.app Payload/
-          zip -qry AstroLab-v0.1-unsigned.ipa Payload
-          test -s AstroLab-v0.1-unsigned.ipa
-      - name: Upload IPA
+          cp -R "$APP" Payload/
+          zip -qry "$IPA" Payload
+          test -s "$IPA"
+          unzip -t "$IPA" | tail -1
+          unzip -Z -1 "$IPA" | grep -qx 'Payload/AstroLab.app/Info.plist'
+          shasum -a 256 "$IPA" | tee "$IPA.sha256"
+
+      - name: Upload verified unsigned IPA and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: AstroLab-v0.1-unsigned-IPA
-          path: astrolab-build/AstroLab-v0.1-unsigned.ipa
+          name: AstroLab-v0.1.1-build${{ github.run_number }}-verified-unsigned
+          path: |
+            astrolab-build/AstroLab-v0.1.1-build${{ github.run_number }}-unsigned.ipa
+            astrolab-build/AstroLab-v0.1.1-build${{ github.run_number }}-unsigned.ipa.sha256
           if-no-files-found: error
+          retention-days: 30
