@@ -1,0 +1,57 @@
+name: AstroLab v0.1 - iPhone Build
+on:
+  workflow_dispatch:
+  push:
+    branches: [astrolab-v0.1]
+    paths:
+      - 'astrolab_payload/**'
+      - '.github/workflows/astrolab-ios.yml'
+permissions:
+  contents: read
+jobs:
+  build-ios:
+    name: Build AstroLab v0.1 (Unsigned)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Checkout AstroLab development branch
+        uses: actions/checkout@v4
+      - name: Reconstruct and validate source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat astrolab_payload/part01.b64 astrolab_payload/part02.b64 astrolab_payload/part03.b64 astrolab_payload/part04.b64 | base64 -D > AstroLab-source.tar.xz
+          echo 'bb895e52d5d527cc808ecabfa96a57fabfb6156f9adcdaa597d84ddb36089343  AstroLab-source.tar.xz' | shasum -a 256 -c -
+          mkdir -p astrolab
+          tar -xJf AstroLab-source.tar.xz -C astrolab
+          test -f astrolab/project.yml
+          test -f astrolab/iOS/AstroLab/AstroLabApp.swift
+      - name: Run portable FITS processor tests
+        working-directory: astrolab
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate iOS Xcode project
+        working-directory: astrolab
+        run: xcodegen generate --spec project.yml
+      - name: Compile Release for physical iPhone (unsigned)
+        working-directory: astrolab
+        run: |
+          set -euo pipefail
+          xcodebuild -project AstroLab.xcodeproj -scheme AstroLab -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+      - name: Create unsigned IPA
+        working-directory: astrolab
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d build/Build/Products/Release-iphoneos/AstroLab.app
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/AstroLab.app Payload/
+          zip -qry AstroLab-v0.1-build${{ github.run_number }}-unsigned.ipa Payload
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroLab-v0.1-build${{ github.run_number }}-unsigned-IPA
+          path: astrolab/AstroLab-v0.1-build${{ github.run_number }}-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
