@@ -101,6 +101,10 @@ jobs:
           IPA="AstroLab-v0.1.1-build${{ github.run_number }}-unsigned.ipa"
           test -d "$APP"
           test -f "$APP/Info.plist"
+          # The archived source contains a custom Info.plist without version keys.
+          # This is an unsigned bundle, so insert reproducible release metadata here.
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.1.1" "$APP/Info.plist" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.1.1" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$APP/Info.plist" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${{ github.run_number }}" "$APP/Info.plist"
           EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
           IDENTIFIER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
